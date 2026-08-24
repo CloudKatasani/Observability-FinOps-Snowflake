@@ -12,10 +12,12 @@ import ProvenanceBar from "@/components/Provenance";
 import { EmptyState, ErrorState, LoadingRegion } from "@/components/states";
 import { useMeta, useMetricQuery, useMetricTile, useSourceIndex, useSources } from "@/hooks/useApi";
 import { useDateRange } from "@/hooks/useDateRange";
+import { useScope } from "@/hooks/useScope";
 import type { Decimal } from "@/lib/decimal";
 import { addAll, divideDecimals, toPlotNumber } from "@/lib/decimal";
 import { formatBucketLabel, formatDecimalPercent, formatDecimalValue } from "@/lib/format";
 import { alignedTimeSeries, groupTotals } from "@/lib/series";
+import { scopeLabel } from "@/store/scope";
 import { trailingMonths } from "@/store/timeRange";
 
 const TREND_MONTHS = 13;
@@ -35,17 +37,18 @@ function shareOf(part: Decimal, whole: Decimal): string {
 
 export default function ExecutivePage() {
   const range = useDateRange();
+  const scope = useScope();
   const meta = useMeta();
   const sources = useSources();
   const registry = useSourceIndex();
   const palette = meta.data?.branding.palette ?? NEUTRAL_PALETTE;
 
-  const totalCredits = useMetricTile("cost.total_credits", range);
-  const billedCredits = useMetricTile("cost.billed_credits", range);
-  const spend = useMetricTile("cost.spend_usd", range);
-  const unattributed = useMetricTile("cost.unattributed_share", range);
-  const idleShare = useMetricTile("wh.idle_pct", range);
-  const costPerQuery = useMetricTile("cost.per_query", range);
+  const totalCredits = useMetricTile("cost.total_credits", range, scope);
+  const billedCredits = useMetricTile("cost.billed_credits", range, scope);
+  const spend = useMetricTile("cost.spend_usd", range, scope);
+  const unattributed = useMetricTile("cost.unattributed_share", range, scope);
+  const idleShare = useMetricTile("wh.idle_pct", range, scope);
+  const costPerQuery = useMetricTile("cost.per_query", range, scope);
 
   // The trend is defined over 13 months (§16.1) and ends with the selected
   // period, so the global range still moves it.
@@ -57,6 +60,7 @@ export default function ExecutivePage() {
     grain: "month",
     limit: 200,
     order: [{ field: "TIME_BUCKET", descending: false }],
+    ...scope,
   });
 
   const byServiceType = useMetricQuery("executive-service-type", {
@@ -66,6 +70,7 @@ export default function ExecutivePage() {
     end: range.end,
     grain: "month",
     limit: 2000,
+    ...scope,
   });
 
   const byWarehouse = useMetricQuery("executive-warehouse", {
@@ -75,6 +80,7 @@ export default function ExecutivePage() {
     end: range.end,
     grain: "month",
     limit: 5000,
+    ...scope,
   });
 
   const offenders = useMetricQuery("executive-offenders", {
@@ -84,6 +90,7 @@ export default function ExecutivePage() {
     end: range.end,
     grain: "month",
     limit: 5000,
+    ...scope,
   });
 
   const contributions = [
@@ -180,7 +187,7 @@ export default function ExecutivePage() {
   return (
     <PageFrame
       title="Executive cost dashboard"
-      description={`Where the Snowflake bill went between ${range.start} and ${range.end}, and how much of it is attributable.`}
+      description={`Where the Snowflake bill went at ${scopeLabel(scope)} scope between ${range.start} and ${range.end}, and how much of it is attributable.`}
       contributions={contributions}
       sources={sources.data}
     >
@@ -251,6 +258,7 @@ export default function ExecutivePage() {
               sql={byWarehouse.data.sql}
               registry={registry}
               label="Cost by warehouse"
+              scope={byWarehouse.data}
             />
           ) : null}
         </Panel>
@@ -295,6 +303,7 @@ export default function ExecutivePage() {
             sql={offenders.data.sql}
             registry={registry}
             label="Top offender fingerprints"
+            scope={offenders.data}
           />
         ) : null}
       </Panel>

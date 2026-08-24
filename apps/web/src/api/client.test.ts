@@ -9,17 +9,23 @@ import {
   fetchLiveness,
   fetchMetricTile,
   fetchReadiness,
+  fetchScopeOptions,
   fetchSources,
+  isScopeUnavailable,
   metricQueryResponseSchema,
   metricTileSchema,
   queryMetrics,
   readinessSchema,
+  scopeOptionsSchema,
 } from "@/api/client";
 import {
   BLOCKED_ALLOCATION,
   COVERAGE,
   METRIC_QUERY_RESPONSE,
+  ORGANIZATION_COVERAGE,
   PUBLISHED_ALLOCATION,
+  SCOPE_OPTIONS,
+  SCOPE_UNAVAILABLE_PROBLEM,
   SOURCES,
   TOTAL_CREDITS_TILE,
   UNAVAILABLE_TILE,
@@ -249,5 +255,130 @@ describe("source registry parsing", () => {
   it("raises ApiError when the registry endpoint fails", async () => {
     stubFetch({ "/api/v1/sources": { status: 500, body: {} } });
     await expect(fetchSources()).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("scope parsing", () => {
+  it("parses the scopes on offer and what each can answer", async () => {
+    stubFetch({ "/api/v1/metrics/scopes": { body: SCOPE_OPTIONS } });
+
+    const scopes = await fetchScopeOptions();
+
+    expect(scopes.options[0]).toMatchObject({ value: "organization", scope: "organization" });
+    expect(scopes.options[3]).toMatchObject({
+      value: "ACME_SANDBOX",
+      answerable_metrics: 11,
+      total_metrics: 92,
+    });
+  });
+
+  it("rejects an option with no coverage count — the count is the point", () => {
+    const parsed = scopeOptionsSchema.safeParse({
+      ...SCOPE_OPTIONS,
+      options: [without(SCOPE_OPTIONS.options[0], "answerable_metrics")],
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("keeps the scope a metric response reports, and the accounts behind it", async () => {
+    stubFetch({
+      "/api/v1/metrics/query": {
+        body: {
+          ...METRIC_QUERY_RESPONSE,
+          scope_partial: true,
+          contributing_accounts: ["ACME_PROD", "ACME_APAC"],
+        },
+      },
+    });
+
+    const response = await queryMetrics({ metrics: ["cost.total_credits"] });
+
+    expect(response.scope).toBe("organization");
+    expect(response.scope_partial).toBe(true);
+    expect(response.contributing_accounts).toEqual(["ACME_PROD", "ACME_APAC"]);
+  });
+
+  it("rejects a metric response that does not say which scope it was computed at", () => {
+    // R5: a figure whose scope is unknown cannot be labelled honestly, so the
+    // boundary refuses it rather than defaulting it to the organization.
+    expect(metricQueryResponseSchema.safeParse(without(METRIC_QUERY_RESPONSE, "scope")).success).toBe(
+      false,
+    );
+    expect(metricTileSchema.safeParse(without(TOTAL_CREDITS_TILE, "scope_partial")).success).toBe(
+      false,
+    );
+  });
+
+  it("scopes a tile request without inventing an account for the organization", async () => {
+    stubFetch({ "/api/v1/metrics/cost.total_credits/tile": { body: TOTAL_CREDITS_TILE } });
+
+    await fetchMetricTile(
+      "cost.total_credits",
+      { start: "2026-08-01", end: "2026-08-24" },
+      { scope: "organization", account: null },
+    );
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain("scope=organization");
+    expect(String(vi.mocked(fetch).mock.calls[0][0])).not.toContain("account=");
+
+    await fetchMetricTile(
+      "cost.total_credits",
+      { start: "2026-08-01", end: "2026-08-24" },
+      { scope: "account", account: "ACME_PROD" },
+    );
+    expect(String(vi.mocked(fetch).mock.calls[1][0])).toContain("scope=account&account=ACME_PROD");
+  });
+
+  it("carries the API's reason out of a scope refusal instead of only its status", async () => {
+    // "422" and "this metric describes the whole organization" are not the same
+    // answer, and R3 needs the second one to reach the reader.
+    stubFetch({ "/api/v1/metrics/query": { status: 422, body: SCOPE_UNAVAILABLE_PROBLEM } });
+
+    const error = await queryMetrics({ metrics: ["q.volume"] }).catch((raised: unknown) => raised);
+
+    expect(isScopeUnavailable(error)).toBe(true);
+    expect((error as ApiError).message).toContain("Select an account");
+    expect((error as ApiError).status).toBe(422);
+  });
+
+  it("falls back to the status when a failure carries no problem document", async () => {
+    stubFetch({ "/api/v1/sources": { status: 502, body: "gateway" } });
+
+    const error = await fetchSources().catch((raised: unknown) => raised);
+
+    expect(isScopeUnavailable(error)).toBe(false);
+    expect((error as ApiError).message).toContain("failed with 502");
+  });
+});
+
+describe("per-account coverage parsing", () => {
+  it("parses each source's per-account slice and the lake's account list", async () => {
+    stubFetch({ "/api/v1/datasets/coverage": { body: ORGANIZATION_COVERAGE } });
+
+    const coverage = await fetchCoverage();
+    const queryHistory = coverage.sources.find((source) => source.source_id === "query_history");
+
+    expect(coverage.accounts).toEqual(["ACME_PROD", "ACME_SANDBOX"]);
+    expect(queryHistory?.scope).toBe("account");
+    expect(queryHistory?.accounts.find((entry) => entry.account === "ACME_SANDBOX")?.status).toBe(
+      "missing",
+    );
+  });
+
+  it("marks an organization-scoped source as such, with no per-account breakdown", () => {
+    const parsed = coverageMatrixSchema.parse(ORGANIZATION_COVERAGE);
+    const currency = parsed.sources.find((source) => source.source_id === "usage_in_currency_daily");
+
+    expect(currency?.scope).toBe("organization");
+    expect(currency?.accounts).toEqual([]);
+  });
+
+  it("reads a single-account matrix that predates the account stamp", () => {
+    // A lake ingested before ingest recorded accounts has neither field. It is
+    // a single-account deployment as far as this page is concerned, not an
+    // error.
+    const parsed = coverageMatrixSchema.parse(COVERAGE);
+    expect(parsed.accounts).toEqual([]);
+    expect(parsed.sources[0].scope).toBe("account");
+    expect(parsed.sources[0].accounts).toEqual([]);
   });
 });

@@ -1,14 +1,17 @@
 import type { ReactNode } from "react";
 
-import type { Provenance, SourceSummary } from "@/api/client";
+import type { ProvenanceContribution, SourceSummary } from "@/api/client";
 import FreshnessBanner from "@/components/FreshnessBanner";
 
 interface PageFrameProps {
   title: string;
   /** One sentence on what decision this page supports. */
   description: string;
-  /** Provenance of everything on the page — drives the freshness banner (R7). */
-  contributions: readonly (Provenance | undefined | null)[];
+  /**
+   * Provenance of everything on the page — drives the freshness banner (R7)
+   * and, where the endpoint reports one, the scope statement beside it.
+   */
+  contributions: readonly (ProvenanceContribution | undefined | null)[];
   sources?: readonly SourceSummary[];
   children: ReactNode;
 }

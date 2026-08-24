@@ -1,12 +1,18 @@
 import { useState } from "react";
 
-import type { Provenance, SourceSummary } from "@/api/client";
+import type { Provenance, ScopeContext, SourceSummary } from "@/api/client";
 import { formatClockTime, formatMinutes, shortObjectName } from "@/lib/format";
+import { partialWarning, scopeCaption, scopeContextLabel } from "@/lib/scope";
 
 // R5 made visible. Every tile, chart, and table in the product ends with this
 // strip: when the figure was computed, how stale its slowest source may be,
-// which views it came from, and the exact SQL that produced it. It is part of
-// the reading experience, not a developer affordance hidden behind a flag.
+// whose it is, which views it came from, and the exact SQL that produced it. It
+// is part of the reading experience, not a developer affordance hidden behind a
+// flag.
+//
+// Scope belongs here rather than in a strip of its own. "$45,104" means nothing
+// until you know whether it is one account or the fleet, so it sits beside the
+// as-of stamp and the latency floor, in the same sentence, for the same reason.
 
 function sourceLabel(id: string, registry?: Map<string, SourceSummary>): string {
   const definition = registry?.get(id);
@@ -21,6 +27,8 @@ interface ProvenanceBarProps {
   label: string;
   /** Shown when the endpoint returned no SQL — says why, and where to get it. */
   noSqlNote?: string;
+  /** Where this figure was computed, when the response reported it. */
+  scope?: ScopeContext | null;
 }
 
 export default function ProvenanceBar({
@@ -29,6 +37,7 @@ export default function ProvenanceBar({
   registry,
   label,
   noSqlNote = "This response carried no compiled SQL.",
+  scope,
 }: ProvenanceBarProps) {
   const [copied, setCopied] = useState(false);
 
@@ -48,6 +57,25 @@ export default function ProvenanceBar({
     <div className="mt-3 border-t border-slate-200 pt-2">
       <details className="group">
         <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700">
+          {scope ? (
+            <>
+              <span>
+                scope <span className="font-medium text-slate-700">{scopeCaption(scope)}</span>
+              </span>
+              {scope.scope_partial ? (
+                <span
+                  title={partialWarning(scope)}
+                  className="rounded border border-amber-300 bg-amber-50 px-1 py-px font-medium text-amber-900"
+                >
+                  <span aria-hidden className="mr-0.5 font-bold">
+                    !
+                  </span>
+                  partial
+                </span>
+              ) : null}
+              <span aria-hidden>·</span>
+            </>
+          ) : null}
           <span className="tabular-nums">as of {formatClockTime(provenance.as_of)}</span>
           <span aria-hidden>·</span>
           <span className="tabular-nums">
@@ -82,6 +110,28 @@ export default function ProvenanceBar({
           <pre className="mt-1 max-h-64 overflow-auto rounded border border-slate-200 bg-white p-2 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap text-slate-800">
             {sql || noSqlNote}
           </pre>
+
+          {scope ? (
+            <>
+              <p className="mt-2 text-[11px] font-semibold tracking-wide text-slate-600 uppercase">
+                Scope
+              </p>
+              <p className="mt-1 text-[11px] text-slate-700">
+                Computed at <span className="font-medium">{scopeContextLabel(scope)}</span> scope
+                {scope.contributing_accounts.length > 0
+                  ? ` over ${scope.contributing_accounts.join(", ")}.`
+                  : "."}
+              </p>
+              {scope.scope_partial ? (
+                <p className="mt-1 rounded border border-amber-300 bg-amber-50 px-1.5 py-1 text-[11px] text-amber-900">
+                  <span aria-hidden className="mr-1 font-bold">
+                    !
+                  </span>
+                  {partialWarning(scope)}
+                </p>
+              ) : null}
+            </>
+          ) : null}
 
           <p className="mt-2 text-[11px] font-semibold tracking-wide text-slate-600 uppercase">
             Sources

@@ -1,8 +1,10 @@
 import { useEffect, useRef } from "react";
 import { NavLink, Outlet, useSearchParams } from "react-router-dom";
 
+import ScopePicker from "@/components/ScopePicker";
 import TimeRangePicker from "@/components/TimeRangePicker";
 import { useMeta } from "@/hooks/useApi";
+import { parseScopeSelection, sameScope, useScopeStore } from "@/store/scope";
 import type { PresetId } from "@/store/timeRange";
 import { PRESETS, isIsoDate, useTimeRangeStore } from "@/store/timeRange";
 
@@ -19,14 +21,24 @@ function isPreset(value: string | null): value is PresetId {
   return value === "custom" || PRESETS.some((preset) => preset.id === value);
 }
 
-/** Keeps the global range and the URL query string in step, in both directions. */
-function useRangeUrlSync() {
+/**
+ * Keeps the global filters and the URL query string in step, in both
+ * directions.
+ *
+ * Range and scope share one hook deliberately: two effects each rebuilding the
+ * query string from the same `params` snapshot would race, and the loser's
+ * parameter would be dropped from a link the user was about to share.
+ */
+function useFilterUrlSync() {
   const [params, setParams] = useSearchParams();
   const preset = useTimeRangeStore((state) => state.preset);
   const start = useTimeRangeStore((state) => state.start);
   const end = useTimeRangeStore((state) => state.end);
   const hydrate = useTimeRangeStore((state) => state.hydrate);
   const selectPreset = useTimeRangeStore((state) => state.selectPreset);
+  const scope = useScopeStore((state) => state.scope);
+  const account = useScopeStore((state) => state.account);
+  const selectScope = useScopeStore((state) => state.select);
   const hydrated = useRef(false);
 
   useEffect(() => {
@@ -40,23 +52,41 @@ function useRangeUrlSync() {
     } else if (isPreset(urlPreset)) {
       selectPreset(urlPreset);
     }
-  }, [params, hydrate, selectPreset]);
+    // A malformed scope is ignored rather than guessed at, exactly as a
+    // malformed range is: the default organization scope is the honest
+    // fallback, and it is the widest one the deployment has.
+    const urlScope = parseScopeSelection(params.get("scope"), params.get("account"));
+    if (urlScope) selectScope(urlScope);
+  }, [params, hydrate, selectPreset, selectScope]);
 
   useEffect(() => {
     if (!hydrated.current) return;
-    if (params.get("range") === preset && params.get("start") === start && params.get("end") === end)
+    const urlScope = parseScopeSelection(params.get("scope"), params.get("account"));
+    if (
+      params.get("range") === preset &&
+      params.get("start") === start &&
+      params.get("end") === end &&
+      urlScope !== null &&
+      sameScope(urlScope, { scope, account })
+    )
       return;
     const next = new URLSearchParams(params);
     next.set("range", preset);
     next.set("start", start);
     next.set("end", end);
+    next.set("scope", scope);
+    if (scope === "account" && account) {
+      next.set("account", account);
+    } else {
+      next.delete("account");
+    }
     setParams(next, { replace: true });
-  }, [preset, start, end, params, setParams]);
+  }, [preset, start, end, scope, account, params, setParams]);
 }
 
 export default function AppShell() {
   const meta = useMeta();
-  useRangeUrlSync();
+  useFilterUrlSync();
 
   const palette = meta.data?.branding.palette;
   const brandStyle = palette
@@ -120,8 +150,11 @@ export default function AppShell() {
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
-            <TimeRangePicker />
+          <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-slate-200 bg-white px-4 py-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+              <TimeRangePicker />
+              <ScopePicker />
+            </div>
             <p className="text-[11px] text-slate-500">
               Read-only. Figures are traceable to their compiled SQL.
             </p>

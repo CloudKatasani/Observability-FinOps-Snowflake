@@ -18,6 +18,7 @@ import {
   useSources,
 } from "@/hooks/useApi";
 import { useDateRange } from "@/hooks/useDateRange";
+import { useScope } from "@/hooks/useScope";
 import { divideDecimals, toPlotNumber } from "@/lib/decimal";
 import {
   formatBucketLabel,
@@ -30,6 +31,7 @@ import {
 } from "@/lib/format";
 import { groupTotals, peakByGroup, timeSeries } from "@/lib/series";
 import { freshnessVerdict, statusLabel, statusTone } from "@/lib/status";
+import { scopeLabel } from "@/store/scope";
 
 const TOP_N = 10;
 
@@ -43,15 +45,16 @@ function byUrgency(a: SourceCoverage, b: SourceCoverage): number {
 
 export default function HealthPage() {
   const range = useDateRange();
+  const scope = useScope();
   const meta = useMeta();
   const sources = useSources();
   const registry = useSourceIndex();
   const coverage = useCoverage();
   const palette = meta.data?.branding.palette ?? NEUTRAL_PALETTE;
 
-  const failureRate = useMetricTile("q.failure_rate", range);
-  const queryVolume = useMetricTile("q.volume", range);
-  const queueOverload = useMetricTile("wh.queue_overload_pct", range);
+  const failureRate = useMetricTile("q.failure_rate", range, scope);
+  const queryVolume = useMetricTile("q.volume", range, scope);
+  const queueOverload = useMetricTile("wh.queue_overload_pct", range, scope);
 
   const failureTrend = useMetricQuery("health-failure-trend", {
     metrics: ["q.failure_rate"],
@@ -60,6 +63,7 @@ export default function HealthPage() {
     grain: "day",
     limit: 400,
     order: [{ field: "TIME_BUCKET", descending: false }],
+    ...scope,
   });
 
   const queueByWarehouse = useMetricQuery("health-queue", {
@@ -69,6 +73,7 @@ export default function HealthPage() {
     end: range.end,
     grain: "month",
     limit: 5000,
+    ...scope,
   });
 
   // Utilisation and idle share are ratios, so they cannot be added across
@@ -81,6 +86,7 @@ export default function HealthPage() {
     end: range.end,
     grain: "month",
     limit: 5000,
+    ...scope,
   });
 
   const contributions = [
@@ -188,7 +194,7 @@ export default function HealthPage() {
   return (
     <PageFrame
       title="Platform health"
-      description="Whether the telemetry is arriving on time, whether queries are succeeding, and where warehouses are contended."
+      description={`Whether the telemetry is arriving on time, whether queries are succeeding, and where warehouses are contended, at ${scopeLabel(scope)} scope.`}
       contributions={contributions}
       sources={sources.data}
     >
@@ -315,6 +321,7 @@ export default function HealthPage() {
               sql={warehouseCredits.data.sql}
               registry={registry}
               label="Warehouse utilisation"
+              scope={warehouseCredits.data}
             />
           ) : null}
         </Panel>

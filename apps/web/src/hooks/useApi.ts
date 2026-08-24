@@ -12,6 +12,7 @@ import type {
   MetricQueryRequest,
   MetricQueryResponse,
   MetricTile,
+  ScopeOptions,
   SourceSummary,
 } from "@/api/client";
 import {
@@ -19,9 +20,11 @@ import {
   fetchCoverage,
   fetchMeta,
   fetchMetricTile,
+  fetchScopeOptions,
   fetchSources,
   queryMetrics,
 } from "@/api/client";
+import type { ScopeSelection } from "@/store/scope";
 import type { DateRange } from "@/store/timeRange";
 
 /** Branding and deployment metadata. Stable for the life of a deployment. */
@@ -48,13 +51,39 @@ export function useCoverage(): UseQueryResult<CoverageMatrix> {
   return useQuery({ queryKey: ["coverage"], queryFn: fetchCoverage, staleTime: 60_000 });
 }
 
-export function useMetricTile(metricId: string, range: DateRange): UseQueryResult<MetricTile> {
+/** The organization/account scopes on offer, and what each can answer (§9). */
+export function useScopeOptions(): UseQueryResult<ScopeOptions> {
   return useQuery({
-    queryKey: ["tile", metricId, range.start, range.end],
-    queryFn: () => fetchMetricTile(metricId, range),
+    queryKey: ["scopes"],
+    queryFn: fetchScopeOptions,
+    staleTime: 5 * 60_000,
   });
 }
 
+/**
+ * One KPI tile at the selected scope.
+ *
+ * The scope is part of the query key, not just the request: without it, moving
+ * from the organization to an account would leave the previous figure on screen
+ * under the new account's label until the refetch landed — the one failure the
+ * scope filter exists to prevent.
+ */
+export function useMetricTile(
+  metricId: string,
+  range: DateRange,
+  scope: ScopeSelection,
+): UseQueryResult<MetricTile> {
+  return useQuery({
+    queryKey: ["tile", metricId, range.start, range.end, scope.scope, scope.account],
+    queryFn: () => fetchMetricTile(metricId, range, scope),
+  });
+}
+
+/**
+ * A governed metric query. The whole request is the cache key, so the scope it
+ * carries distinguishes one account's rows from another's without a second
+ * mechanism to keep in step.
+ */
 export function useMetricQuery(
   key: string,
   request: MetricQueryRequest,

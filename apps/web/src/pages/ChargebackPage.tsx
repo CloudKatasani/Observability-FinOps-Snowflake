@@ -9,6 +9,7 @@ import { ErrorState, LoadingRegion } from "@/components/states";
 import type { SqlDisclosure, TeamCost } from "@/api/client";
 import { useAllocation, useMeta, useSourceIndex, useSources } from "@/hooks/useApi";
 import { useDateRange } from "@/hooks/useDateRange";
+import { useScope } from "@/hooks/useScope";
 import { parseDecimal, toPlotNumber } from "@/lib/decimal";
 import { formatCredits, formatFigure } from "@/lib/format";
 
@@ -42,6 +43,7 @@ const COMPONENTS: { label: string; pick: (team: TeamCost) => string }[] = [
 
 export default function ChargebackPage() {
   const range = useDateRange();
+  const scope = useScope();
   const meta = useMeta();
   const sources = useSources();
   const registry = useSourceIndex();
@@ -62,10 +64,12 @@ export default function ChargebackPage() {
   return (
     <PageFrame
       title="Team chargeback"
-      description={`Fully allocated cost by team for ${range.start} to ${range.end}, published only behind the reconciliation gate.`}
+      description={`Fully allocated cost by team for ${range.start} to ${range.end}, allocated across every landed account and published only behind the reconciliation gate.`}
       contributions={[data]}
       sources={sources.data}
     >
+      {scope.scope === "account" ? <OrganizationOnlyNotice account={scope.account} /> : null}
+
       {allocation.isPending ? (
         <Panel title="Reconciliation gate">
           <LoadingRegion label="Running the allocation and its reconciliation" lines={4} />
@@ -200,6 +204,39 @@ export default function ChargebackPage() {
         </>
       )}
     </PageFrame>
+  );
+}
+
+/**
+ * The allocation waterfall runs over the whole tenant: the chargeback endpoint
+ * takes no account filter, and the gate reconciles against the account-day
+ * metering total for every landed account together.
+ *
+ * Rendering these figures under an account's name in the scope picker would be
+ * exactly the mis-scoping the scope filter exists to prevent — an organization
+ * figure wearing an account's label, undetectable downstream. So the page says
+ * plainly what it is showing instead, and keeps showing it.
+ */
+function OrganizationOnlyNotice({ account }: { account: string | null }) {
+  return (
+    <section
+      role="note"
+      aria-label="Scope notice"
+      className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
+    >
+      <p className="font-semibold">
+        <span aria-hidden className="mr-1.5 font-bold">
+          !
+        </span>
+        These figures are organization-wide, not {account ?? "this account"}&rsquo;s.
+      </p>
+      <p className="mt-1">
+        The allocation waterfall and its reconciliation gate run over every landed account
+        together, so the chargeback endpoint cannot be narrowed to one account. Nothing below is
+        filtered to {account ?? "the selected account"}. Switch the scope filter back to
+        Organization to read this page as it is computed.
+      </p>
+    </section>
   );
 }
 

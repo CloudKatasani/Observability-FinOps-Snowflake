@@ -54,6 +54,49 @@ export const provenanceSchema = z.object({
 });
 export type Provenance = z.infer<typeof provenanceSchema>;
 
+// -------------------------------------------------------------------- scope
+// A figure is only meaningful once you know *whose* it is. Every metric
+// response says where it was computed, and — for an organization roll-up —
+// which accounts actually contributed, so a roll-up over the accounts landed so
+// far is never presented as the whole organization (§9, R3/R5).
+
+export const scopeKindSchema = z.enum(["organization", "account"]);
+export type ScopeKind = z.infer<typeof scopeKindSchema>;
+
+export const scopeContextSchema = z.object({
+  scope: scopeKindSchema,
+  scope_account: z.string().nullish(),
+  //: True when an organization figure covers only the accounts landed so far.
+  scope_partial: z.boolean(),
+  contributing_accounts: z.array(z.string()),
+});
+export type ScopeContext = z.infer<typeof scopeContextSchema>;
+
+/** One entry in the scope selector, with how much of the catalogue it answers. */
+export const scopeOptionSchema = z.object({
+  value: z.string(),
+  label: z.string(),
+  scope: scopeKindSchema,
+  answerable_metrics: z.number(),
+  total_metrics: z.number(),
+});
+export type ScopeOption = z.infer<typeof scopeOptionSchema>;
+
+export const scopeOptionsSchema = z.object({
+  mode: z.string(),
+  organization: z.string().nullish(),
+  options: z.array(scopeOptionSchema),
+});
+export type ScopeOptions = z.infer<typeof scopeOptionsSchema>;
+
+/**
+ * What a page collects to drive its freshness and scope banners: provenance
+ * always, and the scope fields from those endpoints that report them. The
+ * allocation and coverage endpoints do not yet, so the scope half is optional
+ * rather than faked.
+ */
+export type ProvenanceContribution = Provenance & Partial<ScopeContext>;
+
 /** A single cell of a metric result set: Decimals arrive as strings. */
 export const cellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 export type Cell = z.infer<typeof cellSchema>;
@@ -71,7 +114,7 @@ export const directionSchema = z.enum(["lower_is_better", "higher_is_better", "n
 
 // -------------------------------------------------------------------- metrics
 
-export const metricQueryResponseSchema = provenanceSchema.extend({
+export const metricQueryResponseSchema = provenanceSchema.merge(scopeContextSchema).extend({
   metrics: z.array(z.string()),
   columns: z.array(z.string()),
   rows: z.array(z.array(cellSchema)),
@@ -81,7 +124,7 @@ export const metricQueryResponseSchema = provenanceSchema.extend({
 });
 export type MetricQueryResponse = z.infer<typeof metricQueryResponseSchema>;
 
-export const metricTileSchema = provenanceSchema.extend({
+export const metricTileSchema = provenanceSchema.merge(scopeContextSchema).extend({
   metric_id: z.string(),
   name: z.string(),
   value: cellSchema,
@@ -128,6 +171,10 @@ export interface MetricQueryRequest {
   grain?: TimeGrain;
   limit?: number;
   order?: { field: string; descending?: boolean }[];
+  //: The global scope filter. `scope: "account"` requires `account`; the API
+  //: rejects the pair rather than widening it to the organization.
+  scope?: ScopeKind;
+  account?: string | null;
 }
 
 // ---------------------------------------------------------------- chargeback
@@ -197,11 +244,31 @@ export type SourceStatus = z.infer<typeof sourceStatusSchema>;
 
 export const metricAvailabilitySchema = z.enum(["enabled", "degraded", "unavailable"]);
 
+/** How a source is exported: once per account, or once for the whole fleet. */
+export const sourceScopeSchema = z.enum(["account", "organization"]);
+export type SourceScope = z.infer<typeof sourceScopeSchema>;
+
+/**
+ * One account's slice of one source. Present only where ingest recorded which
+ * account a batch came from — the account is never inferred from the rows.
+ */
+export const accountCoverageSchema = z.object({
+  account: z.string(),
+  status: sourceStatusSchema,
+  rows: z.number(),
+  batches: z.number(),
+  window_start: z.string().nullish(),
+  window_end: z.string().nullish(),
+  freshness_minutes: z.number().nullish(),
+});
+export type AccountCoverage = z.infer<typeof accountCoverageSchema>;
+
 export const sourceCoverageSchema = z.object({
   source_id: z.string(),
   snowflake_object: z.string(),
   domain: z.string(),
   criticality: z.string(),
+  scope: sourceScopeSchema.default("account"),
   status: sourceStatusSchema,
   rows: z.number(),
   batches: z.number(),
@@ -212,6 +279,8 @@ export const sourceCoverageSchema = z.object({
   latency_verified: z.boolean(),
   remediation: z.string().nullish(),
   enables_metric_count: z.number(),
+  //: Per-account status, empty when the lake records no account stamps.
+  accounts: z.array(accountCoverageSchema).default([]),
 });
 export type SourceCoverage = z.infer<typeof sourceCoverageSchema>;
 
@@ -229,6 +298,9 @@ export const coverageMatrixSchema = z.object({
   mode: z.string(),
   sources: z.array(sourceCoverageSchema),
   metrics: z.array(metricCoverageSchema).default([]),
+  //: Accounts whose extracts are present in this tenant's lake. Empty for a
+  //: deployment that never told ingest which account it was uploading.
+  accounts: z.array(z.string()).default([]),
 });
 export type CoverageMatrix = z.infer<typeof coverageMatrixSchema>;
 
@@ -243,20 +315,62 @@ export const sourceSummarySchema = z.object({
 });
 export type SourceSummary = z.infer<typeof sourceSummarySchema>;
 
+/** The RFC 7807 document the API returns for every expected failure (§15). */
+export const problemDetailSchema = z.object({
+  type: z.string().default("about:blank"),
+  title: z.string(),
+  status: z.number(),
+  detail: z.string().nullish(),
+  instance: z.string().nullish(),
+});
+export type ProblemDetail = z.infer<typeof problemDetailSchema>;
+
+/** A metric that cannot be answered at the requested scope, per `services/scope.py`. */
+export const SCOPE_UNAVAILABLE_PROBLEM = "https://snowobs.dev/problems/scope-unavailable";
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** The RFC 7807 `type`, when the API sent a problem document. */
+    readonly problemType?: string,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
 
+/**
+ * "This metric cannot answer at the scope you selected" — a well-formed request
+ * against healthy data, not a failure. R3 says surface the reason where the
+ * figure would have been, so callers render it as an explanation rather than an
+ * alarm.
+ */
+export function isScopeUnavailable(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.problemType === SCOPE_UNAVAILABLE_PROBLEM;
+}
+
+/**
+ * Turn a failed response into an error that still carries the API's reason.
+ *
+ * Discarding the problem body and reporting only the status would strip exactly
+ * the sentence R3 exists to show — "this metric describes the whole
+ * organization" reads very differently from "422".
+ */
+async function failure(method: string, path: string, response: Response): Promise<ApiError> {
+  const fallback = `${method} ${path} failed with ${response.status}`;
+  try {
+    const problem = problemDetailSchema.parse(await response.json());
+    return new ApiError(response.status, problem.detail ?? problem.title, problem.type);
+  } catch {
+    return new ApiError(response.status, fallback);
+  }
+}
+
 async function getJson(path: string, allowStatuses: number[] = []): Promise<unknown> {
   const response = await fetch(path, { headers: { accept: "application/json" } });
   if (!response.ok && !allowStatuses.includes(response.status)) {
-    throw new ApiError(response.status, `GET ${path} failed with ${response.status}`);
+    throw await failure("GET", path, response);
   }
   return response.json();
 }
@@ -268,7 +382,7 @@ async function postJson(path: string, body: unknown): Promise<unknown> {
     body: JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new ApiError(response.status, `POST ${path} failed with ${response.status}`);
+    throw await failure("POST", path, response);
   }
   return response.json();
 }
@@ -286,6 +400,11 @@ export async function fetchMeta(): Promise<Meta> {
   return metaSchema.parse(await getJson("/api/v1/meta"));
 }
 
+/** The scopes this deployment can answer at, and how much each can answer. */
+export async function fetchScopeOptions(): Promise<ScopeOptions> {
+  return scopeOptionsSchema.parse(await getJson("/api/v1/metrics/scopes"));
+}
+
 /** Run a governed metric query. Rows come back with the SQL that produced them. */
 export async function queryMetrics(request: MetricQueryRequest): Promise<MetricQueryResponse> {
   return metricQueryResponseSchema.parse(await postJson("/api/v1/metrics/query", request));
@@ -295,8 +414,15 @@ export async function queryMetrics(request: MetricQueryRequest): Promise<MetricQ
 export async function fetchMetricTile(
   metricId: string,
   range: { start: string; end: string },
+  scope?: { scope: ScopeKind; account: string | null },
 ): Promise<MetricTile> {
   const query = new URLSearchParams({ start: range.start, end: range.end });
+  if (scope) {
+    query.set("scope", scope.scope);
+    // Only an account scope names an account; sending an empty one would make
+    // the API reject a request the user never made.
+    if (scope.scope === "account" && scope.account) query.set("account", scope.account);
+  }
   return metricTileSchema.parse(
     await getJson(`/api/v1/metrics/${encodeURIComponent(metricId)}/tile?${query}`),
   );

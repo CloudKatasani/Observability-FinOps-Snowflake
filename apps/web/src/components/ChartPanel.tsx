@@ -3,6 +3,7 @@ import type { EChartsOption } from "echarts";
 import type { ReactNode } from "react";
 
 import type { MetricQueryResponse, SourceSummary } from "@/api/client";
+import { isScopeUnavailable } from "@/api/client";
 import Chart from "@/charts/Chart";
 import DataTable from "@/components/DataTable";
 import type { Column } from "@/components/DataTable";
@@ -59,6 +60,11 @@ export default function ChartPanel({
     >
       {query.isPending ? (
         <LoadingRegion label={`Loading ${title}`} lines={5} />
+      ) : isScopeUnavailable(query.error) ? (
+        // Not a failure: a well-formed question this metric cannot answer at
+        // the selected scope. R3 says show the reason where the figures would
+        // have been, in the same voice as a missing source — not as an alarm.
+        <EmptyState reason={query.error.message} />
       ) : query.isError ? (
         <ErrorState
           title="Chart unavailable"
@@ -93,6 +99,7 @@ export default function ChartPanel({
           sql={query.data.sql}
           registry={registry}
           label={title}
+          scope={query.data}
         />
       ) : null}
     </Panel>

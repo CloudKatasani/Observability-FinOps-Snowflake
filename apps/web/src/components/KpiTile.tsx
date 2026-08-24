@@ -5,6 +5,7 @@ import ProvenanceBar from "@/components/Provenance";
 import { ProvisionalBadge } from "@/components/badges";
 import { EmptyState, ErrorState, LoadingRegion } from "@/components/states";
 import { formatFigure, unitLabel } from "@/lib/format";
+import { scopeContextLabel } from "@/lib/scope";
 
 interface KpiTileProps {
   /** The tile query, owned by the page so its provenance can feed the banner. */
@@ -16,12 +17,13 @@ interface KpiTileProps {
 
 export default function KpiTile({ query, label, registry }: KpiTileProps) {
   const heading = label ?? query.data?.name ?? "Figure";
+  const tile = query.data;
 
   return (
     <article className="flex flex-col rounded border border-slate-200 bg-white p-4">
       <h3 className="flex flex-wrap items-center gap-2 text-[11px] font-semibold tracking-wider text-slate-500 uppercase">
         {heading}
-        {query.data?.provisional ? <ProvisionalBadge /> : null}
+        {tile?.provisional ? <ProvisionalBadge /> : null}
       </h3>
 
       <div className="mt-2 flex-1">
@@ -35,7 +37,8 @@ export default function KpiTile({ query, label, registry }: KpiTileProps) {
             onRetry={() => void query.refetch()}
           />
         ) : query.data.unavailable_reason ? (
-          // R3: a missing source explains itself. It never renders as 0.
+          // R3: a missing source, or a scope this metric cannot answer at,
+          // explains itself. Neither ever renders as 0.
           <EmptyState reason={query.data.unavailable_reason} />
         ) : (
           <TileValue
@@ -46,26 +49,46 @@ export default function KpiTile({ query, label, registry }: KpiTileProps) {
               query.data.unit,
             )}
             unit={unitLabel(query.data.format_type, query.data.unit)}
+            scope={scopeContextLabel(query.data)}
           />
         )}
       </div>
 
-      {query.data && !query.data.unavailable_reason ? (
+      {tile ? (
+        // The strip is shown even for a tile that could not answer: which scope
+        // the question was asked at, and how stale the answer would have been,
+        // are part of understanding why there is no number (R5, R7).
         <ProvenanceBar
-          provenance={query.data}
-          sql={query.data.sql}
+          provenance={tile}
+          sql={tile.sql}
           registry={registry}
           label={heading}
+          scope={tile}
+          noSqlNote={
+            tile.unavailable_reason
+              ? "No SQL was compiled, because this metric was not run: the reason above says why."
+              : undefined
+          }
         />
       ) : null}
     </article>
   );
 }
 
-function TileValue({ value, unit }: { value: string | null; unit: string | null }) {
+function TileValue({
+  value,
+  unit,
+  scope,
+}: {
+  value: string | null;
+  unit: string | null;
+  scope: string;
+}) {
   if (value === null) {
     return (
-      <EmptyState reason="No rows matched this period, so the figure is unknown rather than zero." />
+      <EmptyState
+        reason={`No rows matched this period at ${scope} scope, so the figure is unknown rather than zero.`}
+      />
     );
   }
   return (

@@ -71,6 +71,10 @@ export const METRIC_QUERY_RESPONSE = {
   ],
   row_count: 3,
   truncated: false,
+  scope: "organization",
+  scope_account: null,
+  scope_partial: false,
+  contributing_accounts: [],
   as_of: "2026-08-24T03:02:27.800588Z",
   latency_floor_minutes: 180,
   provisional: false,
@@ -92,6 +96,10 @@ export const TOTAL_CREDITS_TILE = {
   format_decimals: 1,
   unit: "credits",
   direction: "lower_is_better",
+  scope: "organization",
+  scope_account: null,
+  scope_partial: false,
+  contributing_accounts: [],
   as_of: "2026-08-24T14:32:00Z",
   latency_floor_minutes: 180,
   provisional: false,
@@ -109,6 +117,10 @@ export const SPEND_TILE = {
   format_decimals: 2,
   unit: "USD",
   direction: "lower_is_better",
+  scope: "organization",
+  scope_account: null,
+  scope_partial: false,
+  contributing_accounts: [],
   as_of: "2026-08-24T14:32:00Z",
   latency_floor_minutes: 4320,
   provisional: true,
@@ -127,6 +139,10 @@ export const UNAVAILABLE_TILE = {
   format_decimals: 1,
   unit: null,
   direction: "lower_is_better",
+  scope: "organization",
+  scope_account: null,
+  scope_partial: false,
+  contributing_accounts: [],
   as_of: "2026-08-24T14:32:00Z",
   latency_floor_minutes: 480,
   provisional: false,
@@ -287,4 +303,215 @@ export const COVERAGE = {
       explanation: "Unavailable — requires warehouse_load_history",
     },
   ],
+};
+
+// ─────────────────────────────────────────────────────────── scope selection
+// A four-account organization, as `/api/v1/metrics/scopes` reports it. The
+// per-scope counts are the point: ACME_SANDBOX has had only billing uploaded,
+// so most of the catalogue has nothing to show there.
+
+export const SCOPE_OPTIONS = {
+  mode: "offline",
+  organization: "ACME_GROUP",
+  options: [
+    {
+      value: "organization",
+      label: "Organization",
+      scope: "organization",
+      answerable_metrics: 92,
+      total_metrics: 92,
+    },
+    {
+      value: "ACME_PROD",
+      label: "ACME_PROD",
+      scope: "account",
+      answerable_metrics: 84,
+      total_metrics: 92,
+    },
+    {
+      value: "ACME_ANALYTICS",
+      label: "ACME_ANALYTICS",
+      scope: "account",
+      answerable_metrics: 84,
+      total_metrics: 92,
+    },
+    {
+      value: "ACME_SANDBOX",
+      label: "ACME_SANDBOX",
+      scope: "account",
+      answerable_metrics: 11,
+      total_metrics: 92,
+    },
+  ],
+};
+
+/** A deployment with one account: the picker has nothing to choose between. */
+export const SINGLE_SCOPE_OPTIONS = {
+  mode: "offline",
+  organization: null,
+  options: [SCOPE_OPTIONS.options[0]],
+};
+
+/**
+ * An organization roll-up computed over the accounts landed so far. `q.volume`
+ * is additive, so the organization figure is the sum of the four accounts —
+ * and `scope_partial` says the denominator is only what has been uploaded.
+ */
+export const PARTIAL_ORGANIZATION_TILE = {
+  ...TOTAL_CREDITS_TILE,
+  metric_id: "q.volume",
+  name: "Query volume",
+  value: 13362,
+  format_type: "integer",
+  format_decimals: 0,
+  unit: null,
+  scope_partial: true,
+  contributing_accounts: ["ACME_ANALYTICS", "ACME_APAC", "ACME_PROD"],
+};
+
+/** The same metric asked of one account: no roll-up, so nothing is partial. */
+export const ACCOUNT_SCOPED_TILE = {
+  ...TOTAL_CREDITS_TILE,
+  value: "4021.100000000",
+  scope: "account",
+  scope_account: "ACME_PROD",
+  scope_partial: false,
+  contributing_accounts: ["ACME_PROD"],
+};
+
+/** A metric with no per-account meaning, asked of an account (§9). */
+export const SCOPE_UNAVAILABLE_TILE = {
+  ...TOTAL_CREDITS_TILE,
+  metric_id: "cost.spend_usd",
+  name: "Spend in currency",
+  value: null,
+  format_type: "currency",
+  format_decimals: 2,
+  unit: "USD",
+  scope: "account",
+  scope_account: "ACME_SANDBOX",
+  scope_partial: false,
+  contributing_accounts: ["ACME_SANDBOX"],
+  sql: "",
+  unavailable_reason:
+    "Spend in currency describes the whole organization — it comes from " +
+    "usage_in_currency_daily, which has no per-account breakdown. Switch to organization " +
+    "scope to see it.",
+};
+
+/** The RFC 7807 body the API returns when a query cannot answer at a scope. */
+export const SCOPE_UNAVAILABLE_PROBLEM = {
+  type: "https://snowobs.dev/problems/scope-unavailable",
+  title: "Metric unavailable at this scope",
+  status: 422,
+  detail:
+    "Query volume reads ACCOUNT_USAGE, which returns one account per connection. " +
+    "Select an account, or use an ORGANIZATION_USAGE metric.",
+  instance: "/api/v1/metrics/query",
+};
+
+// ────────────────────────────────────────────────────── multi-account coverage
+// Two accounts, unequally landed: ACME_PROD has query history, ACME_SANDBOX has
+// only billing. `usage_in_currency_daily` is organization-scoped — exported
+// once for the fleet, so it carries no per-account breakdown at all.
+
+export const ORGANIZATION_COVERAGE = {
+  as_of: "2026-08-24T03:01:46.455203Z",
+  mode: "offline",
+  accounts: ["ACME_PROD", "ACME_SANDBOX"],
+  sources: [
+    {
+      source_id: "metering_daily_history",
+      snowflake_object: "SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY",
+      domain: "cost",
+      criticality: "core",
+      scope: "account",
+      status: "available",
+      rows: 480,
+      batches: 2,
+      window_start: "2026-07-01",
+      window_end: "2026-08-20",
+      freshness_minutes: 340.5,
+      documented_latency_minutes: 180,
+      latency_verified: true,
+      remediation: null,
+      enables_metric_count: 7,
+      accounts: [
+        {
+          account: "ACME_PROD",
+          status: "available",
+          rows: 400,
+          batches: 1,
+          window_start: "2026-07-01",
+          window_end: "2026-08-20",
+          freshness_minutes: 340.5,
+        },
+        {
+          account: "ACME_SANDBOX",
+          status: "available",
+          rows: 80,
+          batches: 1,
+          window_start: "2026-07-01",
+          window_end: "2026-08-20",
+          freshness_minutes: 340.5,
+        },
+      ],
+    },
+    {
+      source_id: "query_history",
+      snowflake_object: "SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY",
+      domain: "query",
+      criticality: "core",
+      scope: "account",
+      status: "available",
+      rows: 13362,
+      batches: 1,
+      window_start: "2026-07-01",
+      window_end: "2026-08-20",
+      freshness_minutes: 60,
+      documented_latency_minutes: 45,
+      latency_verified: true,
+      remediation: null,
+      enables_metric_count: 9,
+      accounts: [
+        {
+          account: "ACME_PROD",
+          status: "available",
+          rows: 13362,
+          batches: 1,
+          window_start: "2026-07-01",
+          window_end: "2026-08-20",
+          freshness_minutes: 60,
+        },
+        {
+          account: "ACME_SANDBOX",
+          status: "missing",
+          rows: 0,
+          batches: 0,
+          window_start: null,
+          window_end: null,
+          freshness_minutes: null,
+        },
+      ],
+    },
+    {
+      source_id: "usage_in_currency_daily",
+      snowflake_object: "SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY",
+      domain: "cost",
+      criticality: "important",
+      scope: "organization",
+      status: "available",
+      rows: 51,
+      batches: 1,
+      window_start: "2026-07-01",
+      window_end: "2026-08-20",
+      freshness_minutes: 4000,
+      documented_latency_minutes: 4320,
+      latency_verified: false,
+      remediation: null,
+      enables_metric_count: 3,
+      accounts: [],
+    },
+  ],
+  metrics: [],
 };
