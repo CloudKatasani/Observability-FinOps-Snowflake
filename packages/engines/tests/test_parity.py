@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 import sqlglot
@@ -25,6 +26,7 @@ import sqlglot
 from snowobs_engines.base import QueryResult
 from snowobs_engines.duckdb_engine import DuckDBEngine
 from snowobs_engines.parity import PARITY_EXCEPTIONS, compare_results
+from snowobs_ingest.catalog import DuckDBCatalog
 from snowobs_semantics.compiler import (
     Filter,
     FilterOperator,
@@ -294,3 +296,39 @@ def test_ordering_and_limit_are_applied(engine: DuckDBEngine, compiler: Semantic
     assert len(result.rows) <= 5
     values = [row[-1] for row in result.rows if row[-1] is not None]
     assert values == sorted(values, reverse=True)
+
+
+def test_engine_does_not_depend_on_compat(lake: Path, compiler: SemanticCompiler) -> None:
+    """The compat macros are a test facility, and this proves it.
+
+    The parity suite installs Snowflake function semantics as DuckDB macros so
+    it can execute the real Snowflake-dialect SQL without a Snowflake account.
+    That is only sound while the *engine* never relies on them: if a DuckDB
+    query started emitting `TRY_TO_TIMESTAMP_NTZ` or `DIV0`, every test would
+    still pass — the macro would quietly answer — and production, which
+    installs nothing, would fail on the first query.
+
+    So every metric is executed here against a connection with the macros
+    explicitly removed.
+    """
+    from snowobs_engines.snowflake_compat import (
+        install as install_compat,
+    )
+    from snowobs_engines.snowflake_compat import (
+        uninstall as uninstall_compat,
+    )
+
+    with DuckDBCatalog(lake) as bare:
+        bare.register_all()
+        # Install then remove, so this also proves removal is complete rather
+        # than asserting against a connection that never had them.
+        install_compat(bare.connection)
+        uninstall_compat(bare.connection)
+
+        engine = DuckDBEngine(bare)
+        for metric_id in sorted(default_model().metrics):
+            compiled = compiler.compile(
+                MetricRequest(metrics=[metric_id], time_range=WINDOW, limit=10),
+                Dialect.DUCKDB,
+            )
+            engine.execute(compiled)  # raises if it reaches for a Snowflake macro

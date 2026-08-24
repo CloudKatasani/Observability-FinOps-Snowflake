@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -270,26 +269,3 @@ def score(
             result.failures.append(f"expected the figure {question.expected_value} in the answer")
 
     return result
-
-
-def run_suite(runner: Any, questions: list[GoldenQuestion] | None = None) -> EvalReport:
-    """Run every golden question through ``runner`` and score the answers.
-
-    ``runner(question) -> (answer, tools, metrics, grounded, refused, outputs)``
-    keeps the harness independent of how the agent is wired.
-    """
-    report = EvalReport()
-    for question in questions or load_questions():
-        answer, tools, metrics, grounded, refused, outputs = runner(question)
-        report.results.append(
-            score(
-                question,
-                answer=answer,
-                tools_called=tools,
-                metrics_used=metrics,
-                grounded=grounded,
-                refused=refused,
-                tool_outputs=outputs,
-            )
-        )
-    return report

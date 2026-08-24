@@ -248,10 +248,6 @@ class SemanticCompiler:
         sql = apply_shims(sql, dialect)
         return self._describe(sql, dialect, metrics, request, grain, list(by_entity))
 
-    def compile_both(self, request: MetricRequest) -> dict[Dialect, CompiledQuery]:
-        """Compile for both engines — the parity harness's entry point."""
-        return {dialect: self.compile(request, dialect) for dialect in Dialect}
-
     # ------------------------------------------------------------- internals
     def _group_by_entity(self, metrics: Sequence[Metric]) -> dict[str, list[Metric]]:
         grouped: dict[str, list[Metric]] = {}
