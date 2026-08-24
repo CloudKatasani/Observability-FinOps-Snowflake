@@ -1,0 +1,31 @@
+id: grants_to_roles
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_ROLES
+domain: security
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.SECURITY_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [GRANTEE_NAME, PRIVILEGE, GRANTED_ON, NAME, GRANTED_BY, CREATED_ON]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [PRIVILEGE, GRANTED_ON, NAME, GRANTED_TO, GRANTEE_NAME, GRANT_OPTION]
+  aliases: [grants_to_roles, role_grants, grants_to_roles_export]
+columns:
+  - {name: CREATED_ON, type: timestamp_ltz, required: true}
+  - {name: MODIFIED_ON, type: timestamp_ltz, required: false}
+  - {name: PRIVILEGE, type: string, required: true}
+  - {name: GRANTED_ON, type: string, required: true}
+  - {name: NAME, type: string, required: true}
+  - {name: TABLE_CATALOG, type: string, required: false}
+  - {name: TABLE_SCHEMA, type: string, required: false}
+  - {name: GRANTED_TO, type: string, required: false}
+  - {name: GRANTEE_NAME, type: string, required: true}
+  - {name: GRANT_OPTION, type: boolean, required: false}
+  - {name: GRANTED_BY, type: string, required: false}
+  - {name: DELETED_ON, type: timestamp_ltz, required: false}
+enables_metrics: [sec.privilege_*, sec.rbac_*, gov.access_review]
+notes: >
+  Includes dropped grants (DELETED_ON set) — filter DELETED_ON IS NULL for the
+  current privilege graph. Latency verified 2026-08-24.

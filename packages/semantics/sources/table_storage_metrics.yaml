@@ -1,0 +1,35 @@
+id: table_storage_metrics
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.TABLE_STORAGE_METRICS
+domain: storage
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 90
+retention_days: 0
+grain: [ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [ID, TABLE_NAME, ACTIVE_BYTES, TIME_TRAVEL_BYTES, FAILSAFE_BYTES, RETAINED_FOR_CLONE_BYTES]
+  aliases: [table_storage_metrics, table_storage, table_storage_metrics_snapshot]
+columns:
+  - {name: ID, type: string, required: true}
+  - {name: TABLE_NAME, type: string, required: true}
+  - {name: TABLE_SCHEMA, type: string, required: false}
+  - {name: TABLE_CATALOG, type: string, required: false}
+  - {name: CLONE_GROUP_ID, type: string, required: false}
+  - {name: ACTIVE_BYTES, type: number, required: true}
+  - {name: TIME_TRAVEL_BYTES, type: number, required: true}
+  - {name: FAILSAFE_BYTES, type: number, required: true}
+  - {name: RETAINED_FOR_CLONE_BYTES, type: number, required: true}
+  - {name: IS_TRANSIENT, type: string, required: false}
+  - {name: DELETED, type: boolean, required: false}
+  - {name: TABLE_CREATED, type: timestamp_ltz, required: false}
+  - {name: TABLE_DROPPED, type: timestamp_ltz, required: false}
+  - {name: TABLE_ENTERED_FAILSAFE, type: timestamp_ltz, required: false}
+  - {name: RETENTION_TIME, type: integer, required: false}
+enables_metrics: [storage.by_table, storage.time_travel_*, opt.storage_offender_*]
+notes: >
+  Current metrics per table, not a 365-day history view — successive snapshots
+  build the trend. Includes dropped tables still in Time Travel/Fail-safe.
+  Latency verified 2026-08-24.

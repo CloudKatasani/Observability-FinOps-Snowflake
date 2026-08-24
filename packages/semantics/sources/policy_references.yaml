@@ -1,0 +1,31 @@
+id: policy_references
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.POLICY_REFERENCES
+domain: governance
+criticality: optional
+edition_min: enterprise
+required_db_role: SNOWFLAKE.GOVERNANCE_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [POLICY_ID, REF_ENTITY_DOMAIN, REF_DATABASE_NAME, REF_SCHEMA_NAME, REF_ENTITY_NAME, REF_COLUMN_NAME]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [POLICY_NAME, POLICY_KIND, REF_ENTITY_NAME, REF_ENTITY_DOMAIN, POLICY_STATUS]
+  aliases: [policy_references, policy_references_export]
+columns:
+  - {name: POLICY_DB, type: string, required: false}
+  - {name: POLICY_SCHEMA, type: string, required: false}
+  - {name: POLICY_ID, type: string, required: true}
+  - {name: POLICY_NAME, type: string, required: true}
+  - {name: POLICY_KIND, type: string, required: true}
+  - {name: REF_DATABASE_NAME, type: string, required: false}
+  - {name: REF_SCHEMA_NAME, type: string, required: false}
+  - {name: REF_ENTITY_NAME, type: string, required: true}
+  - {name: REF_ENTITY_DOMAIN, type: string, required: true}
+  - {name: REF_COLUMN_NAME, type: string, required: false}
+  - {name: POLICY_STATUS, type: string, required: false}
+enables_metrics: [gov.policy_coverage, gov.policy_health]
+notes: >
+  Masking/row-access/other policies require Enterprise Edition or higher.
+  POLICY_STATUS surfaces broken attachments (e.g. dangling references).
+  Latency verified 2026-08-24.

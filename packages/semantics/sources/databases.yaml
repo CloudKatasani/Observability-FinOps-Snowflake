@@ -1,0 +1,29 @@
+id: databases
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.DATABASES
+domain: catalog
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.OBJECT_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [DATABASE_ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [DATABASE_ID, DATABASE_NAME, DATABASE_OWNER, RETENTION_TIME, CREATED]
+  aliases: [databases, databases_export, databases_snapshot]
+columns:
+  - {name: DATABASE_ID, type: string, required: true}
+  - {name: DATABASE_NAME, type: string, required: true}
+  - {name: DATABASE_OWNER, type: string, required: false}
+  - {name: IS_TRANSIENT, type: string, required: false}
+  - {name: COMMENT, type: string, required: false}
+  - {name: CREATED, type: timestamp_ltz, required: false}
+  - {name: LAST_ALTERED, type: timestamp_ltz, required: false}
+  - {name: DELETED, type: timestamp_ltz, required: false}
+  - {name: RETENTION_TIME, type: integer, required: false}
+  - {name: TYPE, type: string, required: false}
+enables_metrics: [catalog.db_inventory, storage.by_database, gov.retention_*]
+notes: >
+  Dimension snapshot including dropped databases (DELETED set). Joins to
+  DATABASE_STORAGE_USAGE_HISTORY on DATABASE_ID. Latency verified 2026-08-24.

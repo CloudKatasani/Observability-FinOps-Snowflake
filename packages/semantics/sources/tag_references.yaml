@@ -1,0 +1,31 @@
+id: tag_references
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.TAG_REFERENCES
+domain: governance
+criticality: core
+edition_min: enterprise
+required_db_role: SNOWFLAKE.GOVERNANCE_VIEWER
+documented_latency_minutes: 120
+latency_verified: false   # 2 h implied, not stated per-view — ASSUMPTIONS U-1
+retention_days: 0
+grain: [TAG_DATABASE, TAG_SCHEMA, TAG_NAME, OBJECT_DATABASE, OBJECT_SCHEMA, OBJECT_NAME, COLUMN_NAME, DOMAIN]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [TAG_DATABASE, TAG_NAME, TAG_VALUE, OBJECT_NAME, DOMAIN]
+  aliases: [tag_references, tag_references_export, tags]
+columns:
+  - {name: TAG_DATABASE, type: string, required: true}
+  - {name: TAG_SCHEMA, type: string, required: true}
+  - {name: TAG_NAME, type: string, required: true}
+  - {name: TAG_VALUE, type: string, required: false}
+  - {name: OBJECT_DATABASE, type: string, required: false}
+  - {name: OBJECT_SCHEMA, type: string, required: false}
+  - {name: OBJECT_NAME, type: string, required: true}
+  - {name: COLUMN_NAME, type: string, required: false}
+  - {name: DOMAIN, type: string, required: true}
+  - {name: OBJECT_DELETED, type: timestamp_ltz, required: false}
+enables_metrics: [alloc.by_tag, gov.tag_coverage, cost.showback_*]
+notes: >
+  Object tagging requires Enterprise Edition or higher. Core input for
+  tag-based cost allocation (showback/chargeback). Grain columns with NULLs
+  (e.g. COLUMN_NAME for table-level tags) are part of the natural key.

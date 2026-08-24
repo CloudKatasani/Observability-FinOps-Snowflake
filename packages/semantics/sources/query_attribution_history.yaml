@@ -1,0 +1,36 @@
+id: query_attribution_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.QUERY_ATTRIBUTION_HISTORY
+domain: cost
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 480
+retention_days: 365
+grain: [QUERY_ID]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 720
+load_strategy: incremental_watermark
+csv:
+  header_signature: [QUERY_ID, WAREHOUSE_ID, START_TIME, CREDITS_ATTRIBUTED_COMPUTE]
+  aliases: [query_attribution_history, query_attribution]
+columns:
+  - {name: QUERY_ID, type: string, required: true}
+  - {name: PARENT_QUERY_ID, type: string, required: false}
+  - {name: ROOT_QUERY_ID, type: string, required: false}
+  - {name: WAREHOUSE_ID, type: string, required: true}
+  - {name: WAREHOUSE_NAME, type: string, required: false}
+  - {name: USER_NAME, type: string, required: false}
+  - {name: QUERY_TAG, type: string, required: false}
+  - {name: QUERY_HASH, type: string, required: false}
+  - {name: QUERY_PARAMETERIZED_HASH, type: string, required: false}
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: CREDITS_ATTRIBUTED_COMPUTE, type: number, required: true}
+  - {name: CREDITS_USED_QUERY_ACCELERATION, type: number, required: false, default: 0}
+enables_metrics: [alloc.direct, cost.per_query, opt.offender_*]
+notes: >
+  Latency 8 h (verified — commonly misquoted as 6 h). Excludes warehouse idle
+  time and cloud services; queries <=100 ms and Adaptive Warehouse jobs are
+  excluded (ASSUMPTIONS A-3/A-4). Fully populated from mid-Aug 2024 onward.

@@ -1,0 +1,27 @@
+id: contract_items
+snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.ORGANIZATION_BILLING_VIEWER
+documented_latency_minutes: 1440
+retention_days: 0
+grain: [CONTRACT_NUMBER, CONTRACT_ITEM]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [CONTRACT_NUMBER, CONTRACT_ITEM, AMOUNT, START_DATE, END_DATE]
+  aliases: [contract_items, contracts]
+columns:
+  - {name: ORGANIZATION_NAME, type: string, required: false}
+  - {name: CONTRACT_NUMBER, type: string, required: true}
+  - {name: CONTRACT_ITEM, type: string, required: true}
+  - {name: AMOUNT, type: number, required: true}
+  - {name: CURRENCY, type: string, required: true}
+  - {name: START_DATE, type: date, required: true}
+  - {name: END_DATE, type: date, required: false}
+enables_metrics: [budget.*, forecast.contract_burn]
+notes: >
+  Snapshot of current contract line items (capacity purchases, rollovers, free
+  usage). Requires ORGADMIN-enabled account or the organization account
+  (ASSUMPTIONS §2). Amendments restate rows — full snapshot each load.

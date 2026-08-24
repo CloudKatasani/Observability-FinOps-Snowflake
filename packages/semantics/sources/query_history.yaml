@@ -1,0 +1,61 @@
+id: query_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY
+domain: query
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 45
+retention_days: 365
+grain: [QUERY_ID]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [QUERY_ID, QUERY_TEXT, WAREHOUSE_NAME, START_TIME, TOTAL_ELAPSED_TIME]
+  aliases: [query_history, query_history_export, queries]
+columns:
+  - {name: QUERY_ID, type: string, required: true}
+  - {name: QUERY_TEXT, type: string, required: false}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: QUERY_TYPE, type: string, required: false}
+  - {name: SESSION_ID, type: string, required: false}
+  - {name: USER_NAME, type: string, required: true}
+  - {name: ROLE_NAME, type: string, required: false}
+  - {name: WAREHOUSE_ID, type: string, required: false}
+  - {name: WAREHOUSE_NAME, type: string, required: false}
+  - {name: WAREHOUSE_SIZE, type: string, required: false}
+  - {name: WAREHOUSE_TYPE, type: string, required: false}
+  - {name: CLUSTER_NUMBER, type: integer, required: false}
+  - {name: QUERY_TAG, type: string, required: false}
+  - {name: EXECUTION_STATUS, type: string, required: true}
+  - {name: ERROR_CODE, type: string, required: false}
+  - {name: ERROR_MESSAGE, type: string, required: false}
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: TOTAL_ELAPSED_TIME, type: number, required: true}
+  - {name: BYTES_SCANNED, type: number, required: false, default: 0}
+  - {name: PERCENTAGE_SCANNED_FROM_CACHE, type: number, required: false, default: 0}
+  - {name: ROWS_PRODUCED, type: number, required: false, default: 0}
+  - {name: COMPILATION_TIME, type: number, required: false, default: 0}
+  - {name: EXECUTION_TIME, type: number, required: false, default: 0}
+  - {name: QUEUED_PROVISIONING_TIME, type: number, required: false, default: 0}
+  - {name: QUEUED_REPAIR_TIME, type: number, required: false, default: 0}
+  - {name: QUEUED_OVERLOAD_TIME, type: number, required: false, default: 0}
+  - {name: TRANSACTION_BLOCKED_TIME, type: number, required: false, default: 0}
+  - {name: BYTES_SPILLED_TO_LOCAL_STORAGE, type: number, required: false, default: 0}
+  - {name: BYTES_SPILLED_TO_REMOTE_STORAGE, type: number, required: false, default: 0}
+  - {name: PARTITIONS_SCANNED, type: number, required: false}
+  - {name: PARTITIONS_TOTAL, type: number, required: false}
+  - {name: BYTES_WRITTEN, type: number, required: false, default: 0}
+  - {name: CREDITS_USED_CLOUD_SERVICES, type: number, required: false, default: 0}
+  - {name: QUERY_PARAMETERIZED_HASH, type: string, required: false}
+  - {name: QUERY_HASH, type: string, required: false}
+sensitivity:
+  QUERY_TEXT: restricted   # redacted unless role in {platform_admin, security} (§12.5)
+enables_metrics: [q.*, wh.queue_*, cost.per_query, opt.offender_*]
+notes: >
+  BCR-2225 (2026_02 bundle, preview) adds columns; absorbed additively by drift
+  handling. Latency verified 2026-08-24.

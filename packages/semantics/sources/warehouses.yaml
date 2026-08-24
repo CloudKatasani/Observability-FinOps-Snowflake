@@ -1,0 +1,33 @@
+id: warehouses
+snowflake_object: SHOW WAREHOUSES
+domain: catalog
+criticality: core
+edition_min: standard
+required_db_role: null    # SHOW WAREHOUSES needs only USAGE-visible warehouses
+documented_latency_minutes: 0
+latency_verified: true
+retention_days: 0
+grain: [NAME]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [NAME, SIZE, AUTO_SUSPEND, MIN_CLUSTER_COUNT, MAX_CLUSTER_COUNT]
+  aliases: [warehouses, show_warehouses, warehouses_snapshot]
+columns:
+  - {name: NAME, type: string, required: true}
+  - {name: STATE, type: string, required: false}
+  - {name: TYPE, type: string, required: false}
+  - {name: SIZE, type: string, required: true}
+  - {name: MIN_CLUSTER_COUNT, type: integer, required: false, default: 1}
+  - {name: MAX_CLUSTER_COUNT, type: integer, required: false, default: 1}
+  - {name: SCALING_POLICY, type: string, required: false}
+  - {name: AUTO_SUSPEND, type: integer, required: false}
+  - {name: AUTO_RESUME, type: boolean, required: false}
+  - {name: OWNER, type: string, required: false}
+  - {name: COMMENT, type: string, required: false}
+  - {name: CREATED_ON, type: timestamp_ltz, required: false}
+  - {name: RESOURCE_MONITOR, type: string, required: false}
+enables_metrics: [wh.rightsize_*, wh.autosuspend_*, opt.consolidation]
+notes: >
+  Point-in-time snapshot (SHOW WAREHOUSES result, or CSV export of it). SCD2
+  history is built in DIM_WAREHOUSE from successive snapshots.

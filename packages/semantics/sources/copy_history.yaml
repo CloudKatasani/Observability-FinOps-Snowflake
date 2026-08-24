@@ -1,0 +1,37 @@
+id: copy_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.COPY_HISTORY
+domain: pipeline
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 120
+retention_days: 365
+grain: [FILE_NAME, TABLE_ID, LAST_LOAD_TIME]
+time_column: LAST_LOAD_TIME
+watermark:
+  column: LAST_LOAD_TIME
+  lookback_minutes: 2880   # rows for tables with <32 DML statements can lag 2 days
+load_strategy: incremental_watermark
+csv:
+  header_signature: [FILE_NAME, STAGE_LOCATION, LAST_LOAD_TIME, ROW_COUNT, STATUS, TABLE_NAME]
+  aliases: [copy_history, load_history, copy_into_history]
+columns:
+  - {name: FILE_NAME, type: string, required: true}
+  - {name: STAGE_LOCATION, type: string, required: false}
+  - {name: LAST_LOAD_TIME, type: timestamp_ltz, required: true}
+  - {name: ROW_COUNT, type: number, required: true}
+  - {name: ROW_PARSED, type: number, required: false}
+  - {name: FILE_SIZE, type: number, required: false}
+  - {name: FIRST_ERROR_MESSAGE, type: string, required: false}
+  - {name: ERROR_COUNT, type: number, required: false, default: 0}
+  - {name: STATUS, type: string, required: true}
+  - {name: TABLE_ID, type: string, required: true}
+  - {name: TABLE_NAME, type: string, required: true}
+  - {name: TABLE_SCHEMA_NAME, type: string, required: false}
+  - {name: TABLE_CATALOG_NAME, type: string, required: false}
+  - {name: PIPE_NAME, type: string, required: false}
+enables_metrics: [pipe.load_success_rate, pipe.load_errors, pipe.files_loaded]
+notes: >
+  Documented latency 2 h, but up to 2 DAYS for tables with fewer than 32 DML
+  statements since last update (ASSUMPTIONS §1) — watermark lookback covers the
+  2-day case. Covers both COPY INTO and Snowpipe loads (PIPE_NAME set for pipes).

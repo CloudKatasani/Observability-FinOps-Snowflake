@@ -1,0 +1,27 @@
+id: cortex_analyst_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.CORTEX_ANALYST_USAGE_HISTORY
+domain: ai
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+latency_verified: false
+retention_days: 365
+grain: [START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [START_TIME, END_TIME, REQUEST_COUNT, CREDITS]
+  aliases: [cortex_analyst_usage_history, cortex_analyst_usage]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: REQUEST_COUNT, type: integer, required: true}
+  - {name: CREDITS, type: number, required: true}
+enables_metrics: [cost.ai, ai.analyst_*]
+notes: >
+  Billed per message/request, aggregated per interval. Latency not verified
+  (ASSUMPTIONS U-1) — conservative 3 h assumed.

@@ -1,0 +1,30 @@
+id: metering_daily_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.METERING_DAILY_HISTORY
+domain: cost
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [SERVICE_TYPE, USAGE_DATE]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 2880   # re-read two days to absorb restatement
+load_strategy: incremental_watermark
+csv:
+  header_signature: [SERVICE_TYPE, USAGE_DATE, CREDITS_USED_COMPUTE, CREDITS_USED_CLOUD_SERVICES, CREDITS_BILLED]
+  aliases: [metering_daily_history, metering_daily]
+columns:
+  - {name: SERVICE_TYPE, type: string, required: true}
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: CREDITS_USED_COMPUTE, type: number, required: true}
+  - {name: CREDITS_USED_CLOUD_SERVICES, type: number, required: true}
+  - {name: CREDITS_USED, type: number, required: true}
+  - {name: CREDITS_ADJUSTMENT_CLOUD_SERVICES, type: number, required: true}
+  - {name: CREDITS_BILLED, type: number, required: true}
+enables_metrics: [cost.total_credits, cost.by_service_type, cost.cloud_services_ratio, alloc.reconciliation]
+notes: >
+  The reconciliation gate (R6) reconciles allocated cost against this view.
+  Billed cloud services = CREDITS_USED_CLOUD_SERVICES +
+  CREDITS_ADJUSTMENT_CLOUD_SERVICES (adjustment is negative). Verified 2026-08-24.

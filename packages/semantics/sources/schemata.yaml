@@ -1,0 +1,30 @@
+id: schemata
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA
+domain: catalog
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.OBJECT_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [SCHEMA_ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [SCHEMA_ID, SCHEMA_NAME, CATALOG_NAME, SCHEMA_OWNER, IS_MANAGED_ACCESS]
+  aliases: [schemata, schemas, schemata_export]
+columns:
+  - {name: SCHEMA_ID, type: string, required: true}
+  - {name: SCHEMA_NAME, type: string, required: true}
+  - {name: CATALOG_ID, type: string, required: false}
+  - {name: CATALOG_NAME, type: string, required: false}
+  - {name: SCHEMA_OWNER, type: string, required: false}
+  - {name: IS_TRANSIENT, type: string, required: false}
+  - {name: IS_MANAGED_ACCESS, type: string, required: false}
+  - {name: CREATED, type: timestamp_ltz, required: false}
+  - {name: LAST_ALTERED, type: timestamp_ltz, required: false}
+  - {name: DELETED, type: timestamp_ltz, required: false}
+  - {name: RETENTION_TIME, type: integer, required: false}
+enables_metrics: [catalog.schema_inventory, gov.managed_access_coverage]
+notes: >
+  Dimension snapshot including dropped schemas (DELETED set). CATALOG_* refers
+  to the containing database. Latency verified 2026-08-24.

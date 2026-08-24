@@ -1,0 +1,27 @@
+id: snowpipe_streaming_client_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.SNOWPIPE_STREAMING_CLIENT_HISTORY
+domain: pipeline
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 120
+retention_days: 365
+grain: [CLIENT_NAME, EVENT_TIMESTAMP]
+time_column: EVENT_TIMESTAMP
+watermark:
+  column: EVENT_TIMESTAMP
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [CLIENT_NAME, EVENT_TIMESTAMP, CREDITS_USED]
+  aliases: [snowpipe_streaming_client_history, snowpipe_streaming_clients]
+columns:
+  - {name: EVENT_TIMESTAMP, type: timestamp_ltz, required: true}
+  - {name: CLIENT_NAME, type: string, required: true}
+  - {name: CREDITS_USED, type: number, required: true}
+enables_metrics: [cost.snowpipe_streaming, pipe.streaming_*]
+notes: >
+  Kept deliberately minimal — the Snowpipe Streaming view family is still evolving
+  (companion SNOWPIPE_STREAMING_CHANNEL_HISTORY and FILE_MIGRATION_HISTORY views
+  carry BYTES_MIGRATED and channel detail); extra columns are absorbed additively
+  by drift handling. Streaming credits in METERING_HISTORY lag up to 12 h.

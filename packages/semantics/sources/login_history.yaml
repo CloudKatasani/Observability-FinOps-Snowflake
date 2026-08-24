@@ -1,0 +1,34 @@
+id: login_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.LOGIN_HISTORY
+domain: security
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.SECURITY_VIEWER
+documented_latency_minutes: 120
+retention_days: 365
+grain: [EVENT_ID]
+time_column: EVENT_TIMESTAMP
+watermark:
+  column: EVENT_TIMESTAMP
+  lookback_minutes: 240
+load_strategy: incremental_watermark
+csv:
+  header_signature: [EVENT_ID, EVENT_TIMESTAMP, USER_NAME, REPORTED_CLIENT_TYPE, FIRST_AUTHENTICATION_FACTOR, IS_SUCCESS]
+  aliases: [login_history, login_history_export, logins]
+columns:
+  - {name: EVENT_ID, type: string, required: true}
+  - {name: EVENT_TIMESTAMP, type: timestamp_ltz, required: true}
+  - {name: EVENT_TYPE, type: string, required: false}
+  - {name: USER_NAME, type: string, required: true}
+  - {name: CLIENT_IP, type: string, required: false}
+  - {name: REPORTED_CLIENT_TYPE, type: string, required: false}
+  - {name: REPORTED_CLIENT_VERSION, type: string, required: false}
+  - {name: FIRST_AUTHENTICATION_FACTOR, type: string, required: false}
+  - {name: SECOND_AUTHENTICATION_FACTOR, type: string, required: false}
+  - {name: IS_SUCCESS, type: string, required: true}
+  - {name: ERROR_CODE, type: string, required: false}
+  - {name: ERROR_MESSAGE, type: string, required: false}
+enables_metrics: [sec.login_*, sec.mfa_adoption, sec.failed_logins]
+notes: >
+  IS_SUCCESS is YES/NO text. Feeds the MFA-rollout readiness signals (single-
+  factor password logins blocked from Oct 2026). Latency verified 2026-08-24.

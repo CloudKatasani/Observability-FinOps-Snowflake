@@ -1,0 +1,31 @@
+id: cortex_functions_query_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.CORTEX_FUNCTIONS_QUERY_USAGE_HISTORY
+domain: ai
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+latency_verified: false
+retention_days: 365
+grain: [QUERY_ID, FUNCTION_NAME, MODEL_NAME]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [QUERY_ID, FUNCTION_NAME, MODEL_NAME, TOKENS, TOKEN_CREDITS]
+  aliases: [cortex_functions_query_usage_history, cortex_functions_query_usage]
+columns:
+  - {name: QUERY_ID, type: string, required: true}
+  - {name: WAREHOUSE_ID, type: string, required: false}
+  - {name: FUNCTION_NAME, type: string, required: true}
+  - {name: MODEL_NAME, type: string, required: true}
+  - {name: TOKENS, type: number, required: true}
+  - {name: TOKEN_CREDITS, type: number, required: true}
+enables_metrics: [cost.ai, cost.per_query, ai.tokens_*]
+notes: >-
+  No native time column: rows are keyed by QUERY_ID and dated by joining
+  QUERY_HISTORY.START_TIME. Loaded as a full snapshot because the watermark
+  loader has no column to advance on; the join supplies the time dimension.
+  
+  Per-query Cortex function usage. The view exposes no time column of its own —
+  incremental loads key off QUERY_HISTORY.START_TIME via QUERY_ID join.
+  Latency not verified (ASSUMPTIONS U-1) — conservative 3 h assumed.

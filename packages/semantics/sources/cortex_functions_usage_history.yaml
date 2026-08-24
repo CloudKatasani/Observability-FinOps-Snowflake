@@ -1,0 +1,31 @@
+id: cortex_functions_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.CORTEX_FUNCTIONS_USAGE_HISTORY
+domain: ai
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+latency_verified: false
+retention_days: 365
+grain: [FUNCTION_NAME, MODEL_NAME, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [FUNCTION_NAME, MODEL_NAME, START_TIME, TOKENS, TOKEN_CREDITS]
+  aliases: [cortex_functions_usage_history, cortex_functions_usage]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: FUNCTION_NAME, type: string, required: true}
+  - {name: MODEL_NAME, type: string, required: true}
+  - {name: WAREHOUSE_ID, type: string, required: false}
+  - {name: TOKENS, type: number, required: true}
+  - {name: TOKEN_CREDITS, type: number, required: true}
+enables_metrics: [cost.ai, ai.tokens_*]
+notes: >
+  Latency not verified (ASSUMPTIONS U-1) — conservative 3 h assumed. Newer
+  CORTEX_AI_FUNCTIONS_USAGE_HISTORY (~5 min latency) is preferred for
+  near-real-time AI cost where present.

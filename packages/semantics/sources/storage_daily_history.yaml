@@ -1,0 +1,29 @@
+id: storage_daily_history
+snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY
+domain: storage
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.ORGANIZATION_USAGE_VIEWER
+documented_latency_minutes: 1440
+retention_days: 365
+grain: [ACCOUNT_NAME, USAGE_DATE]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 2880   # daily grain — re-read two days
+load_strategy: incremental_watermark
+csv:
+  header_signature: [ACCOUNT_NAME, USAGE_DATE, AVERAGE_BYTES, CREDITS]
+  aliases: [storage_daily_history, org_storage_daily]
+columns:
+  - {name: ORGANIZATION_NAME, type: string, required: false}
+  - {name: ACCOUNT_NAME, type: string, required: true}
+  - {name: ACCOUNT_LOCATOR, type: string, required: false}
+  - {name: REGION, type: string, required: false}
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: AVERAGE_BYTES, type: number, required: true}
+  - {name: CREDITS, type: number, required: true}
+enables_metrics: [cost.storage, storage.org_*]
+notes: >
+  Org-wide daily storage per account. Requires ORGADMIN-enabled account or the
+  organization account (ASSUMPTIONS §2).

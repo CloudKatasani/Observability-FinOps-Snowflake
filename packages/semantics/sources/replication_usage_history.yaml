@@ -1,0 +1,25 @@
+id: replication_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.REPLICATION_USAGE_HISTORY
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [DATABASE_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [DATABASE_ID, DATABASE_NAME, START_TIME, CREDITS_USED, BYTES_TRANSFERRED]
+  aliases: [replication_usage_history, replication_usage]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: DATABASE_ID, type: string, required: true}
+  - {name: DATABASE_NAME, type: string, required: true}
+  - {name: CREDITS_USED, type: number, required: true}
+  - {name: BYTES_TRANSFERRED, type: number, required: true}
+enables_metrics: [cost.serverless, cost.replication]

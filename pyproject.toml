@@ -9,7 +9,7 @@ dependencies = []
 package = false
 
 [tool.uv.workspace]
-members = ["apps/api", "apps/worker", "packages/common"]
+members = ["apps/api", "apps/worker", "packages/*", "fixtures/generator"]
 
 [dependency-groups]
 dev = [
@@ -25,7 +25,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["apps/api", "apps/worker", "packages/common"]
+src = ["apps/api", "apps/worker", "packages/common", "packages/semantics", "packages/ingest", "packages/engines", "packages/sqlguard", "packages/agents", "packages/llm", "packages/analytics", "packages/products", "packages/artifacts", "fixtures/generator"]
 
 [tool.ruff.lint]
 select = [
@@ -39,33 +39,50 @@ select = [
     "DTZ",              # naive datetimes
     "RUF",
 ]
+ignore = ["RUF001", "RUF002", "RUF003"]
+# Prose in docstrings and comments uses real typographic dashes and section
+# marks (the spec is written that way); RUF001-003 would have us mangle them.
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.ruff.lint.isort]
-known-first-party = ["snowobs_common", "snowobs_api", "snowobs_worker"]
+known-first-party = ["snowobs_common", "snowobs_api", "snowobs_worker", "snowobs_semantics", "snowobs_ingest", "snowobs_engines", "snowobs_sqlguard", "snowobs_agents", "snowobs_llm", "snowobs_analytics", "snowobs_products", "snowobs_artifacts", "snowobs_fixtures"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "S105", "S106"]  # asserts and dummy credentials in tests
+# This module renders SQL *text for an operator to review and run in their own
+# account* from registry-owned identifiers; the platform never executes it.
+"packages/ingest/src/snowobs_ingest/export_script_gen.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
-mypy_path = ["packages/common/src", "apps/api/src", "apps/worker/src"]
+mypy_path = ["packages/common/src", "packages/semantics/src", "packages/ingest/src", "packages/engines/src", "packages/sqlguard/src", "packages/agents/src", "packages/llm/src", "packages/analytics/src", "packages/products/src", "packages/artifacts/src", "apps/api/src", "apps/worker/src", "fixtures/generator/src"]
 explicit_package_bases = true
+# Strict typing is a rule for shipped library code (see the Definition of Done);
+# test modules are exercised by running them, not by annotating their fixtures.
+exclude = ["/tests/"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 
+# Third-party analytics libraries ship no type information.
 [[tool.mypy.overrides]]
-module = ["snowobs_common.*"]
+module = ["pyarrow.*", "duckdb.*", "polars.*", "arq.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["snowobs_common.*", "snowobs_semantics.*", "snowobs_ingest.*"]
 strict = true
 
 [tool.pytest.ini_options]
-testpaths = ["packages/common/tests", "apps/api/tests", "apps/worker/tests"]
+testpaths = ["packages", "apps", "fixtures"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-q"
 
 [tool.coverage.run]
-source = ["packages/common/src"]
+source = ["packages"]
 
 [tool.coverage.report]
 show_missing = true

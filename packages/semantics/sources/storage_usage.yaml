@@ -1,0 +1,27 @@
+id: storage_usage
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.STORAGE_USAGE
+domain: storage
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 120
+retention_days: 365
+grain: [USAGE_DATE]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 2880   # re-read two days to absorb restatement
+load_strategy: incremental_watermark
+csv:
+  header_signature: [USAGE_DATE, STORAGE_BYTES, STAGE_BYTES, FAILSAFE_BYTES]
+  aliases: [storage_usage, storage_usage_export, account_storage_usage]
+columns:
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: STORAGE_BYTES, type: number, required: true}
+  - {name: STAGE_BYTES, type: number, required: true}
+  - {name: FAILSAFE_BYTES, type: number, required: true}
+  - {name: HYBRID_TABLE_STORAGE_BYTES, type: number, required: false, default: 0}
+enables_metrics: [storage.total_*, storage.trend, cost.storage_*]
+notes: >
+  Account-level daily average bytes across databases, stages, and Fail-safe.
+  Latency verified 2026-08-24.

@@ -1,0 +1,31 @@
+id: remaining_balance_daily
+snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.ORGANIZATION_BILLING_VIEWER
+documented_latency_minutes: 4320
+retention_days: 365
+grain: [DATE, CONTRACT_NUMBER]
+time_column: DATE
+watermark:
+  column: DATE
+  lookback_minutes: 44640   # re-read a month: balances restate until month close
+load_strategy: incremental_watermark
+csv:
+  header_signature: [DATE, CONTRACT_NUMBER, FREE_USAGE_BALANCE, CAPACITY_BALANCE, ON_DEMAND_CONSUMPTION_BALANCE, ROLLOVER_BALANCE]
+  aliases: [remaining_balance_daily, remaining_balance]
+columns:
+  - {name: DATE, type: date, required: true}
+  - {name: ORGANIZATION_NAME, type: string, required: false}
+  - {name: CONTRACT_NUMBER, type: string, required: true}
+  - {name: CURRENCY, type: string, required: false}
+  - {name: FREE_USAGE_BALANCE, type: number, required: true}
+  - {name: CAPACITY_BALANCE, type: number, required: true}
+  - {name: ON_DEMAND_CONSUMPTION_BALANCE, type: number, required: true}
+  - {name: ROLLOVER_BALANCE, type: number, required: true}
+enables_metrics: [budget.remaining_balance, forecast.runway]
+notes: >
+  Latency up to 72 h; balances restate until month close — figures inside the
+  window carry provisional=true (R7, §9.3). Requires ORGADMIN-enabled account
+  or the organization account (ASSUMPTIONS §2).

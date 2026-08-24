@@ -1,0 +1,25 @@
+id: grants_to_users
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.GRANTS_TO_USERS
+domain: security
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.SECURITY_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [ROLE, GRANTED_TO, GRANTEE_NAME, CREATED_ON]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [CREATED_ON, ROLE, GRANTED_TO, GRANTEE_NAME]
+  aliases: [grants_to_users, user_grants, grants_to_users_export]
+columns:
+  - {name: CREATED_ON, type: timestamp_ltz, required: true}
+  - {name: DELETED_ON, type: timestamp_ltz, required: false}
+  - {name: ROLE, type: string, required: true}
+  - {name: GRANTED_TO, type: string, required: true}
+  - {name: GRANTEE_NAME, type: string, required: true}
+  - {name: GRANTED_BY, type: string, required: false}
+enables_metrics: [sec.role_membership, sec.rbac_*, gov.access_review]
+notes: >
+  Includes dropped grants (DELETED_ON set) — filter DELETED_ON IS NULL for
+  current role membership. Latency verified 2026-08-24.

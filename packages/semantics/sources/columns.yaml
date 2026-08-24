@@ -1,0 +1,32 @@
+id: columns
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.COLUMNS
+domain: catalog
+criticality: optional
+edition_min: standard
+required_db_role: SNOWFLAKE.OBJECT_VIEWER
+documented_latency_minutes: 90
+retention_days: 0
+grain: [COLUMN_ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [COLUMN_ID, COLUMN_NAME, TABLE_NAME, ORDINAL_POSITION, DATA_TYPE]
+  aliases: [columns, columns_export, columns_snapshot]
+columns:
+  - {name: COLUMN_ID, type: string, required: true}
+  - {name: COLUMN_NAME, type: string, required: true}
+  - {name: TABLE_ID, type: string, required: true}
+  - {name: TABLE_NAME, type: string, required: false}
+  - {name: TABLE_SCHEMA, type: string, required: false}
+  - {name: TABLE_CATALOG, type: string, required: false}
+  - {name: ORDINAL_POSITION, type: integer, required: false}
+  - {name: IS_NULLABLE, type: string, required: false}
+  - {name: DATA_TYPE, type: string, required: false}
+  - {name: CHARACTER_MAXIMUM_LENGTH, type: integer, required: false}
+  - {name: NUMERIC_PRECISION, type: integer, required: false}
+  - {name: NUMERIC_SCALE, type: integer, required: false}
+  - {name: DELETED, type: timestamp_ltz, required: false}
+enables_metrics: [catalog.column_inventory, gov.schema_drift]
+notes: >
+  Dimension snapshot including dropped columns (DELETED set). IS_NULLABLE is
+  YES/NO text. Latency verified 2026-08-24.

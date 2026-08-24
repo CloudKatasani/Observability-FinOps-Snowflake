@@ -1,0 +1,27 @@
+id: data_transfer_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.DATA_TRANSFER_HISTORY
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 120
+retention_days: 365
+grain: [SOURCE_CLOUD, SOURCE_REGION, TARGET_CLOUD, TARGET_REGION, TRANSFER_TYPE, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [SOURCE_CLOUD, SOURCE_REGION, TARGET_CLOUD, TARGET_REGION, BYTES_TRANSFERRED, TRANSFER_TYPE]
+  aliases: [data_transfer_history, data_transfer]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: SOURCE_CLOUD, type: string, required: true}
+  - {name: SOURCE_REGION, type: string, required: true}
+  - {name: TARGET_CLOUD, type: string, required: true}
+  - {name: TARGET_REGION, type: string, required: true}
+  - {name: BYTES_TRANSFERRED, type: number, required: true}
+  - {name: TRANSFER_TYPE, type: string, required: true}
+enables_metrics: [cost.egress, cost.data_transfer]

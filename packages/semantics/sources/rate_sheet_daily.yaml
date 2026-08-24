@@ -1,0 +1,33 @@
+id: rate_sheet_daily
+snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.RATE_SHEET_DAILY
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.ORGANIZATION_BILLING_VIEWER
+documented_latency_minutes: 1440
+retention_days: 365
+grain: [RATE_SHEET_DATE, ACCOUNT_LOCATOR, USAGE_TYPE]
+time_column: RATE_SHEET_DATE
+watermark:
+  column: RATE_SHEET_DATE
+  lookback_minutes: 2880   # re-read two days; rates restate on contract amendment
+load_strategy: incremental_watermark
+csv:
+  header_signature: [RATE_SHEET_DATE, ACCOUNT_LOCATOR, USAGE_TYPE, EFFECTIVE_RATE, CURRENCY]
+  aliases: [rate_sheet_daily, rate_sheet]
+columns:
+  - {name: RATE_SHEET_DATE, type: date, required: true}
+  - {name: ORGANIZATION_NAME, type: string, required: false}
+  - {name: CONTRACT_NUMBER, type: string, required: false}
+  - {name: ACCOUNT_NAME, type: string, required: false}
+  - {name: ACCOUNT_LOCATOR, type: string, required: true}
+  - {name: REGION, type: string, required: false}
+  - {name: SERVICE_LEVEL, type: string, required: false}
+  - {name: SERVICE_TYPE, type: string, required: false}
+  - {name: USAGE_TYPE, type: string, required: true}
+  - {name: EFFECTIVE_RATE, type: number, required: true}
+  - {name: CURRENCY, type: string, required: true}
+enables_metrics: [cost.spend_currency, cost.effective_rate]
+notes: >
+  Requires ORGADMIN-enabled account or the organization account
+  (ASSUMPTIONS §2). Effective per-usage-type rates after contract discounts.

@@ -1,0 +1,36 @@
+id: task_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.TASK_HISTORY
+domain: pipeline
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 45
+retention_days: 365
+grain: [NAME, SCHEDULED_TIME]
+time_column: SCHEDULED_TIME
+watermark:
+  column: SCHEDULED_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [NAME, SCHEDULED_TIME, STATE, QUERY_ID, COMPLETED_TIME, ERROR_CODE]
+  aliases: [task_history, task_runs, tasks_history]
+columns:
+  - {name: NAME, type: string, required: true}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: QUERY_ID, type: string, required: false}
+  - {name: STATE, type: string, required: true}
+  - {name: ERROR_CODE, type: string, required: false}
+  - {name: ERROR_MESSAGE, type: string, required: false}
+  - {name: SCHEDULED_TIME, type: timestamp_ltz, required: true}
+  - {name: QUERY_START_TIME, type: timestamp_ltz, required: false}
+  - {name: COMPLETED_TIME, type: timestamp_ltz, required: false}
+  - {name: RETURN_VALUE, type: string, required: false}
+  - {name: GRAPH_RUN_GROUP_ID, type: string, required: false}
+  - {name: GRAPH_ROOT_TASK_ID, type: string, required: false}
+  - {name: RUN_ID, type: string, required: false}
+enables_metrics: [pipe.task_success_rate, pipe.task_latency, pipe.task_failures]
+notes: >
+  Latency verified 45 min (ASSUMPTIONS §1). QUERY_ID is null for runs that were
+  skipped or failed before execution; graph columns tie runs into DAG roll-ups.

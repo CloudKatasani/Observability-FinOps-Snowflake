@@ -1,0 +1,31 @@
+id: sessions
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.SESSIONS
+domain: security
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.SECURITY_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [SESSION_ID]
+time_column: CREATED_ON
+watermark:
+  column: CREATED_ON
+  lookback_minutes: 360
+load_strategy: incremental_watermark
+csv:
+  header_signature: [SESSION_ID, CREATED_ON, USER_NAME, AUTHENTICATION_METHOD, CLIENT_APPLICATION_ID]
+  aliases: [sessions, sessions_export, session_history]
+columns:
+  - {name: SESSION_ID, type: string, required: true}
+  - {name: CREATED_ON, type: timestamp_ltz, required: true}
+  - {name: USER_NAME, type: string, required: true}
+  - {name: AUTHENTICATION_METHOD, type: string, required: false}
+  - {name: LOGIN_EVENT_ID, type: string, required: false}
+  - {name: CLIENT_APPLICATION_ID, type: string, required: false}
+  - {name: CLIENT_APPLICATION_VERSION, type: string, required: false}
+  - {name: CLIENT_ENVIRONMENT, type: variant, required: false}
+  - {name: CLOSED_REASON, type: string, required: false}
+enables_metrics: [sec.session_*, sec.client_inventory, sec.auth_method_mix]
+notes: >
+  Joins to LOGIN_HISTORY via LOGIN_EVENT_ID and to QUERY_HISTORY via SESSION_ID.
+  Latency verified 2026-08-24.

@@ -1,0 +1,31 @@
+id: metering_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.METERING_HISTORY
+domain: cost
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [SERVICE_TYPE, START_TIME, ENTITY_ID]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 720   # cloud-services column lags 6 h; SNOWPIPE_STREAMING up to 12 h
+load_strategy: incremental_watermark
+csv:
+  header_signature: [SERVICE_TYPE, START_TIME, ENTITY_ID, NAME, CREDITS_USED]
+  aliases: [metering_history, metering, metering_hourly]
+columns:
+  - {name: SERVICE_TYPE, type: string, required: true}
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: ENTITY_ID, type: string, required: true}
+  - {name: NAME, type: string, required: false}
+  - {name: CREDITS_USED_COMPUTE, type: number, required: true}
+  - {name: CREDITS_USED_CLOUD_SERVICES, type: number, required: false, default: 0}
+  - {name: CREDITS_USED, type: number, required: true}
+enables_metrics: [cost.total_credits, cost.serverless, cost.by_service_type]
+notes: >
+  Hourly per-entity metering across every service type. CREDITS_USED_CLOUD_SERVICES
+  lags up to 6 h behind the rest of the row; SNOWPIPE_STREAMING service-type credits
+  lag up to 12 h (ASSUMPTIONS §1) — watermark lookback set to 12 h accordingly.

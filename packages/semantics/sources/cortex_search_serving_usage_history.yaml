@@ -1,0 +1,30 @@
+id: cortex_search_serving_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.CORTEX_SEARCH_SERVING_USAGE_HISTORY
+domain: ai
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+latency_verified: false
+retention_days: 365
+grain: [SERVICE_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [SERVICE_ID, SERVICE_NAME, START_TIME, END_TIME, CREDITS]
+  aliases: [cortex_search_serving_usage_history, cortex_search_serving_usage]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: SERVICE_ID, type: string, required: true}
+  - {name: SERVICE_NAME, type: string, required: true}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: CREDITS, type: number, required: true}
+enables_metrics: [cost.ai, ai.search_serving_*]
+notes: >
+  Hourly serving-compute credits per Cortex Search service. Latency not verified
+  (ASSUMPTIONS U-1) — conservative 3 h assumed.

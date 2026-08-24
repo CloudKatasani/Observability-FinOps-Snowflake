@@ -1,0 +1,30 @@
+id: warehouse_load_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_LOAD_HISTORY
+domain: warehouse
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [WAREHOUSE_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 360
+load_strategy: incremental_watermark
+csv:
+  header_signature: [START_TIME, WAREHOUSE_NAME, AVG_RUNNING, AVG_QUEUED_LOAD, AVG_QUEUED_PROVISIONING]
+  aliases: [warehouse_load_history, warehouse_load, wh_load_history]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: WAREHOUSE_ID, type: string, required: true}
+  - {name: WAREHOUSE_NAME, type: string, required: false}
+  - {name: AVG_RUNNING, type: number, required: true}
+  - {name: AVG_QUEUED_LOAD, type: number, required: true}
+  - {name: AVG_QUEUED_PROVISIONING, type: number, required: false, default: 0}
+  - {name: AVG_BLOCKED, type: number, required: false, default: 0}
+enables_metrics: [wh.load_*, wh.queue_*, wh.rightsize_*]
+notes: >
+  Hourly warehouse load averages; the primary input for queueing and
+  concurrency right-sizing signals. Latency verified 2026-08-24.

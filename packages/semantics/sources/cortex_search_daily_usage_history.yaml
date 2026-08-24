@@ -1,0 +1,30 @@
+id: cortex_search_daily_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.CORTEX_SEARCH_DAILY_USAGE_HISTORY
+domain: ai
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+latency_verified: false
+retention_days: 365
+grain: [SERVICE_ID, USAGE_DATE]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 2880   # daily grain — re-read two days
+load_strategy: incremental_watermark
+csv:
+  header_signature: [SERVICE_ID, SERVICE_NAME, USAGE_DATE, USAGE_TYPE, CREDITS]
+  aliases: [cortex_search_daily_usage_history, cortex_search_daily_usage]
+columns:
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: SERVICE_ID, type: string, required: true}
+  - {name: SERVICE_NAME, type: string, required: true}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: USAGE_TYPE, type: string, required: true}
+  - {name: CREDITS, type: number, required: true}
+enables_metrics: [cost.ai, ai.search_*]
+notes: >
+  USAGE_TYPE splits serving vs embedding credits per service per day. Latency
+  not verified (ASSUMPTIONS U-1) — conservative 3 h assumed.

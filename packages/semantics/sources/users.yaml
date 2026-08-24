@@ -1,0 +1,35 @@
+id: users
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.USERS
+domain: security
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.SECURITY_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [USER_ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [USER_ID, NAME, LOGIN_NAME, DEFAULT_ROLE, HAS_PASSWORD, HAS_RSA_PUBLIC_KEY]
+  aliases: [users, users_export, users_snapshot]
+columns:
+  - {name: USER_ID, type: string, required: true}
+  - {name: NAME, type: string, required: true}
+  - {name: LOGIN_NAME, type: string, required: false}
+  - {name: DISPLAY_NAME, type: string, required: false}
+  - {name: EMAIL, type: string, required: false}
+  - {name: DEFAULT_ROLE, type: string, required: false}
+  - {name: DEFAULT_WAREHOUSE, type: string, required: false}
+  - {name: DISABLED, type: boolean, required: false}
+  - {name: HAS_PASSWORD, type: boolean, required: false}
+  - {name: HAS_RSA_PUBLIC_KEY, type: boolean, required: false}
+  - {name: LAST_SUCCESS_LOGIN, type: timestamp_ltz, required: false}
+  - {name: CREATED_ON, type: timestamp_ltz, required: false}
+  - {name: DELETED_ON, type: timestamp_ltz, required: false}
+  - {name: TYPE, type: string, required: false}
+sensitivity:
+  EMAIL: restricted   # PII (§12.5)
+enables_metrics: [sec.user_inventory, sec.dormant_users, sec.service_user_*, alloc.by_user]
+notes: >
+  Dimension snapshot including dropped users (DELETED_ON set). TYPE
+  distinguishes PERSON / SERVICE / LEGACY_SERVICE. Latency verified 2026-08-24.

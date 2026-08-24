@@ -1,0 +1,30 @@
+id: warehouse_metering_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+domain: cost
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [WAREHOUSE_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 360   # CREDITS_USED_CLOUD_SERVICES column lags up to 6 h
+load_strategy: incremental_watermark
+csv:
+  header_signature: [WAREHOUSE_ID, WAREHOUSE_NAME, START_TIME, CREDITS_USED, CREDITS_USED_COMPUTE]
+  aliases: [warehouse_metering_history, warehouse_metering, wh_metering]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: WAREHOUSE_ID, type: string, required: true}
+  - {name: WAREHOUSE_NAME, type: string, required: true}
+  - {name: CREDITS_USED, type: number, required: true}
+  - {name: CREDITS_USED_COMPUTE, type: number, required: true}
+  - {name: CREDITS_USED_CLOUD_SERVICES, type: number, required: false, default: 0}
+enables_metrics: [cost.by_warehouse, wh.*, alloc.idle_share]
+notes: >
+  Cloud-services column is raw per-warehouse consumption with NO 10% daily
+  adjustment applied — the adjustment is account-level (see ASSUMPTIONS §4);
+  never sum this column to a billed figure.

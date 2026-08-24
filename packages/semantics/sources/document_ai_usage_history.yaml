@@ -1,0 +1,29 @@
+id: document_ai_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.DOCUMENT_AI_USAGE_HISTORY
+domain: ai
+criticality: optional
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+latency_verified: false
+retention_days: 365
+grain: [MODEL_NAME, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [START_TIME, END_TIME, MODEL_NAME, CREDITS_USED]
+  aliases: [document_ai_usage_history, document_ai_usage]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: MODEL_NAME, type: string, required: true}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: CREDITS_USED, type: number, required: true}
+enables_metrics: [cost.ai]
+notes: >
+  Document AI decommissioned — historical data only (ASSUMPTIONS A-5). Nothing
+  new depends on this source; retained for cost back-history.

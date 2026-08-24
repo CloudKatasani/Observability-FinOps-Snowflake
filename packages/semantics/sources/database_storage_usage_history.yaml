@@ -1,0 +1,28 @@
+id: database_storage_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.DATABASE_STORAGE_USAGE_HISTORY
+domain: storage
+criticality: core
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [DATABASE_ID, USAGE_DATE]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 2880   # re-read two days to absorb restatement
+load_strategy: incremental_watermark
+csv:
+  header_signature: [USAGE_DATE, DATABASE_NAME, AVERAGE_DATABASE_BYTES, AVERAGE_FAILSAFE_BYTES]
+  aliases: [database_storage_usage_history, database_storage_usage, db_storage_usage]
+columns:
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: DATABASE_ID, type: string, required: true}
+  - {name: DATABASE_NAME, type: string, required: true}
+  - {name: AVERAGE_DATABASE_BYTES, type: number, required: true}
+  - {name: AVERAGE_FAILSAFE_BYTES, type: number, required: true}
+  - {name: AVERAGE_HYBRID_TABLE_STORAGE_BYTES, type: number, required: false, default: 0}
+enables_metrics: [storage.by_database, storage.failsafe_ratio, alloc.storage_*]
+notes: >
+  Per-database daily average bytes; the allocation input for storage cost by
+  database. Latency verified 2026-08-24.

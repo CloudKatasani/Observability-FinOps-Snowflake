@@ -1,0 +1,27 @@
+id: roles
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.ROLES
+domain: security
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.SECURITY_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [ROLE_ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [ROLE_ID, NAME, CREATED_ON, OWNER, ROLE_TYPE]
+  aliases: [roles, roles_export, roles_snapshot]
+columns:
+  - {name: ROLE_ID, type: string, required: true}
+  - {name: NAME, type: string, required: true}
+  - {name: CREATED_ON, type: timestamp_ltz, required: false}
+  - {name: DELETED_ON, type: timestamp_ltz, required: false}
+  - {name: COMMENT, type: string, required: false}
+  - {name: OWNER, type: string, required: false}
+  - {name: ROLE_TYPE, type: string, required: false}
+enables_metrics: [sec.role_inventory, sec.rbac_*]
+notes: >
+  Dimension snapshot including dropped roles (DELETED_ON set). ROLE_TYPE
+  distinguishes ROLE / INSTANCE_ROLE / APPLICATION_ROLE / DATABASE_ROLE.
+  Latency verified 2026-08-24.

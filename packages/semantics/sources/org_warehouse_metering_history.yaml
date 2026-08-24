@@ -1,0 +1,35 @@
+id: org_warehouse_metering_history
+snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY
+domain: cost
+criticality: optional
+edition_min: standard
+required_db_role: SNOWFLAKE.ORGANIZATION_USAGE_VIEWER
+documented_latency_minutes: 1440
+retention_days: 365
+grain: [ACCOUNT_NAME, WAREHOUSE_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 2880   # 24 h documented latency — re-read two days
+load_strategy: incremental_watermark
+csv:
+  header_signature: [ACCOUNT_NAME, WAREHOUSE_ID, WAREHOUSE_NAME, START_TIME, CREDITS_USED]
+  aliases: [org_warehouse_metering_history, organization_warehouse_metering_history]
+columns:
+  - {name: ORGANIZATION_NAME, type: string, required: false}
+  - {name: ACCOUNT_NAME, type: string, required: true}
+  - {name: ACCOUNT_LOCATOR, type: string, required: false}
+  - {name: REGION, type: string, required: false}
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: WAREHOUSE_ID, type: string, required: true}
+  - {name: WAREHOUSE_NAME, type: string, required: true}
+  - {name: CREDITS_USED, type: number, required: true}
+  - {name: CREDITS_USED_COMPUTE, type: number, required: false, default: 0}
+  - {name: CREDITS_USED_CLOUD_SERVICES, type: number, required: false, default: 0}
+enables_metrics: [cost.org_by_warehouse]
+notes: >
+  Org-wide rollup of per-account warehouse metering. Requires ORGADMIN-enabled
+  account or the organization account (ASSUMPTIONS §2). Per-account
+  ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY is the primary source; this is a
+  cross-account supplement.

@@ -1,0 +1,29 @@
+id: masking_policies
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.MASKING_POLICIES
+domain: governance
+criticality: optional
+edition_min: enterprise
+required_db_role: SNOWFLAKE.GOVERNANCE_VIEWER
+documented_latency_minutes: 120
+retention_days: 0
+grain: [POLICY_ID]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [POLICY_ID, POLICY_NAME, POLICY_SCHEMA, POLICY_CATALOG, POLICY_RETURN_TYPE]
+  aliases: [masking_policies, masking_policies_export]
+columns:
+  - {name: POLICY_ID, type: string, required: true}
+  - {name: POLICY_NAME, type: string, required: true}
+  - {name: POLICY_SCHEMA, type: string, required: false}
+  - {name: POLICY_CATALOG, type: string, required: false}
+  - {name: POLICY_OWNER, type: string, required: false}
+  - {name: POLICY_SIGNATURE, type: string, required: false}
+  - {name: POLICY_RETURN_TYPE, type: string, required: false}
+  - {name: CREATED, type: timestamp_ltz, required: false}
+  - {name: LAST_ALTERED, type: timestamp_ltz, required: false}
+  - {name: DELETED, type: timestamp_ltz, required: false}
+enables_metrics: [gov.masking_*, gov.policy_inventory]
+notes: >
+  Masking policies require Enterprise Edition or higher. Pair with
+  policy_references for attachment coverage. Latency verified 2026-08-24.

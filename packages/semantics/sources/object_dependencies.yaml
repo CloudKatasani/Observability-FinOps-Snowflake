@@ -1,0 +1,30 @@
+id: object_dependencies
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.OBJECT_DEPENDENCIES
+domain: governance
+criticality: optional
+edition_min: standard
+required_db_role: SNOWFLAKE.GOVERNANCE_VIEWER
+documented_latency_minutes: 180
+retention_days: 0
+grain: [REFERENCING_OBJECT_ID, REFERENCED_OBJECT_ID, DEPENDENCY_TYPE]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [REFERENCED_OBJECT_NAME, REFERENCED_OBJECT_DOMAIN, REFERENCING_OBJECT_NAME, REFERENCING_OBJECT_DOMAIN, DEPENDENCY_TYPE]
+  aliases: [object_dependencies, object_dependencies_export, dependencies]
+columns:
+  - {name: REFERENCED_DATABASE, type: string, required: false}
+  - {name: REFERENCED_SCHEMA, type: string, required: false}
+  - {name: REFERENCED_OBJECT_NAME, type: string, required: true}
+  - {name: REFERENCED_OBJECT_ID, type: string, required: true}
+  - {name: REFERENCED_OBJECT_DOMAIN, type: string, required: true}
+  - {name: REFERENCING_DATABASE, type: string, required: false}
+  - {name: REFERENCING_SCHEMA, type: string, required: false}
+  - {name: REFERENCING_OBJECT_NAME, type: string, required: true}
+  - {name: REFERENCING_OBJECT_ID, type: string, required: true}
+  - {name: REFERENCING_OBJECT_DOMAIN, type: string, required: true}
+  - {name: DEPENDENCY_TYPE, type: string, required: true}
+enables_metrics: [gov.lineage_*, gov.blast_radius, opt.safe_to_drop]
+notes: >
+  Static object-to-object dependency graph (views, UDFs, policies, etc.) —
+  complements ACCESS_HISTORY runtime lineage. Latency verified 2026-08-24.

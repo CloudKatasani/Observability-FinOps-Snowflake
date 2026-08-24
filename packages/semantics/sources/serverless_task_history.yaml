@@ -1,0 +1,28 @@
+id: serverless_task_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.SERVERLESS_TASK_HISTORY
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [TASK_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [TASK_ID, TASK_NAME, START_TIME, CREDITS_USED, SCHEMA_NAME]
+  aliases: [serverless_task_history, serverless_tasks]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: TASK_ID, type: string, required: true}
+  - {name: TASK_NAME, type: string, required: true}
+  - {name: SCHEMA_ID, type: string, required: false}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: DATABASE_ID, type: string, required: false}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: CREDITS_USED, type: number, required: true}
+enables_metrics: [cost.serverless, cost.by_task]

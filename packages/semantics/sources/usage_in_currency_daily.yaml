@@ -1,0 +1,35 @@
+id: usage_in_currency_daily
+snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY
+domain: cost
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.ORGANIZATION_BILLING_VIEWER
+documented_latency_minutes: 4320
+retention_days: 365
+grain: [ORGANIZATION_NAME, ACCOUNT_NAME, USAGE_DATE, USAGE_TYPE, CURRENCY]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 44640   # re-read a month: values restate until month close
+load_strategy: incremental_watermark
+csv:
+  header_signature: [ORGANIZATION_NAME, ACCOUNT_NAME, USAGE_DATE, USAGE_TYPE, USAGE, USAGE_IN_CURRENCY]
+  aliases: [usage_in_currency_daily, usage_in_currency]
+columns:
+  - {name: ORGANIZATION_NAME, type: string, required: true}
+  - {name: CONTRACT_NUMBER, type: string, required: false}
+  - {name: ACCOUNT_NAME, type: string, required: true}
+  - {name: ACCOUNT_LOCATOR, type: string, required: false}
+  - {name: REGION, type: string, required: false}
+  - {name: SERVICE_LEVEL, type: string, required: false}
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: USAGE_TYPE, type: string, required: true}
+  - {name: CURRENCY, type: string, required: true}
+  - {name: USAGE, type: number, required: true}
+  - {name: USAGE_IN_CURRENCY, type: number, required: true}
+  - {name: BALANCE_SOURCE, type: string, required: false}
+enables_metrics: [cost.spend_currency, forecast.*, budget.*]
+notes: >
+  Latency up to 72 h; values restate until month close — figures inside the
+  window carry provisional=true (R7, §9.3). Requires ORGADMIN-enabled account
+  or organization account. Verified 2026-08-24.

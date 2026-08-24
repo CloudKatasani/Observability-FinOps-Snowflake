@@ -1,0 +1,32 @@
+id: task_versions
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.TASK_VERSIONS
+domain: pipeline
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 120
+latency_verified: false
+retention_days: 0
+grain: [ROOT_TASK_ID, GRAPH_VERSION, NAME]
+time_column: null
+load_strategy: full_snapshot
+csv:
+  header_signature: [ROOT_TASK_ID, GRAPH_VERSION, NAME, SCHEDULE, PREDECESSORS]
+  aliases: [task_versions, task_graph_versions]
+columns:
+  - {name: ROOT_TASK_ID, type: string, required: true}
+  - {name: GRAPH_VERSION, type: integer, required: true}
+  - {name: NAME, type: string, required: true}
+  - {name: ID, type: string, required: false}
+  - {name: DATABASE_NAME, type: string, required: false}
+  - {name: SCHEMA_NAME, type: string, required: false}
+  - {name: OWNER, type: string, required: false}
+  - {name: SCHEDULE, type: string, required: false}
+  - {name: PREDECESSORS, type: variant, required: false}
+  - {name: CONDITION_TEXT, type: string, required: false}
+  - {name: DEFINITION, type: string, required: false}
+enables_metrics: [pipe.task_graph_*]
+notes: >
+  Task-graph version catalog used to resolve TASK_HISTORY runs to their DAG
+  definition at run time. Loaded as a snapshot of current + historical versions;
+  latency not verified (ASSUMPTIONS U-1) — conservative 2 h assumed.

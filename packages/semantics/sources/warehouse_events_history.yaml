@@ -1,0 +1,36 @@
+id: warehouse_events_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_EVENTS_HISTORY
+domain: warehouse
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [WAREHOUSE_ID, TIMESTAMP, EVENT_NAME]
+time_column: TIMESTAMP
+watermark:
+  column: TIMESTAMP
+  lookback_minutes: 360
+load_strategy: incremental_watermark
+csv:
+  header_signature: [TIMESTAMP, WAREHOUSE_NAME, EVENT_NAME, EVENT_STATE, CLUSTER_NUMBER]
+  aliases: [warehouse_events_history, warehouse_events, wh_events_history]
+columns:
+  - {name: TIMESTAMP, type: timestamp_ltz, required: true}
+  - {name: WAREHOUSE_ID, type: string, required: true}
+  - {name: WAREHOUSE_NAME, type: string, required: false}
+  - {name: CLUSTER_NUMBER, type: integer, required: false}
+  - {name: EVENT_NAME, type: string, required: true}
+  - {name: EVENT_REASON, type: string, required: false}
+  - {name: EVENT_STATE, type: string, required: false}
+  - {name: SIZE, type: string, required: false}
+  - {name: CLUSTER_COUNT, type: integer, required: false}
+  - {name: USER_NAME, type: string, required: false}
+  - {name: ROLE_NAME, type: string, required: false}
+  - {name: QUERY_ID, type: string, required: false}
+enables_metrics: [wh.autosuspend_*, wh.resize_events, wh.spin_*]
+notes: >
+  BCR-1616 changed event semantics (event names/states consolidated) — treat
+  pre/post-BCR event names as distinct vocabularies. BCR-2225 (2026_02 bundle,
+  preview) adds columns; absorbed additively by drift handling. Latency
+  verified 2026-08-24.

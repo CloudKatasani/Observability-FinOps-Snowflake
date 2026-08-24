@@ -1,0 +1,33 @@
+id: access_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.ACCESS_HISTORY
+domain: security
+criticality: important
+edition_min: enterprise
+required_db_role: SNOWFLAKE.GOVERNANCE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [QUERY_ID, QUERY_START_TIME]
+time_column: QUERY_START_TIME
+watermark:
+  column: QUERY_START_TIME
+  lookback_minutes: 360
+load_strategy: incremental_watermark
+csv:
+  header_signature: [QUERY_ID, QUERY_START_TIME, USER_NAME, DIRECT_OBJECTS_ACCESSED, BASE_OBJECTS_ACCESSED, OBJECTS_MODIFIED]
+  aliases: [access_history, access_history_export]
+columns:
+  - {name: QUERY_ID, type: string, required: true}
+  - {name: QUERY_START_TIME, type: timestamp_ltz, required: true}
+  - {name: USER_NAME, type: string, required: true}
+  - {name: DIRECT_OBJECTS_ACCESSED, type: variant, required: false}
+  - {name: BASE_OBJECTS_ACCESSED, type: variant, required: false}
+  - {name: OBJECTS_MODIFIED, type: variant, required: false}
+  - {name: OBJECT_MODIFIED_BY_DDL, type: variant, required: false}
+  - {name: PARENT_QUERY_ID, type: string, required: false}
+  - {name: ROOT_QUERY_ID, type: string, required: false}
+sensitivity:
+  DIRECT_OBJECTS_ACCESSED: restricted   # object-level access trail (§12.5)
+enables_metrics: [sec.access_*, gov.lineage_*, gov.unused_objects]
+notes: >
+  Enterprise Edition or higher. QUERY_ID is not unique here (a row per
+  query/child job), hence the composite grain. Latency verified 2026-08-24.

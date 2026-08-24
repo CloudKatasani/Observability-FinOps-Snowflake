@@ -1,0 +1,24 @@
+id: stage_storage_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.STAGE_STORAGE_USAGE_HISTORY
+domain: storage
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 120
+retention_days: 365
+grain: [USAGE_DATE]
+time_column: USAGE_DATE
+watermark:
+  column: USAGE_DATE
+  lookback_minutes: 2880   # re-read two days to absorb restatement
+load_strategy: incremental_watermark
+csv:
+  header_signature: [USAGE_DATE, AVERAGE_STAGE_BYTES]
+  aliases: [stage_storage_usage_history, stage_storage_usage]
+columns:
+  - {name: USAGE_DATE, type: date, required: true}
+  - {name: AVERAGE_STAGE_BYTES, type: number, required: true}
+enables_metrics: [storage.stage_*, cost.storage_stage]
+notes: >
+  Account-level daily average bytes in internal stages (no per-stage
+  breakdown). Latency verified 2026-08-24.

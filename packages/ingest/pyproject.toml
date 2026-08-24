@@ -1,27 +1,23 @@
 [project]
-name = "snowobs-api"
+name = "snowobs-ingest"
 version = "0.1.0"
-description = "FastAPI service for the Observability & FinOps Platform for Snowflake"
+description = "Offline ingestion: profile, identify, map, validate, land, drift, catalog"
 requires-python = ">=3.12"
 dependencies = [
     "snowobs-common",
     "snowobs-semantics",
-    "snowobs-ingest",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
-    "sqlalchemy[asyncio]>=2.0.36",
-    "asyncpg>=0.30",
-    "redis>=5.2",
+    "duckdb>=1.1",
+    "polars>=1.17",
+    "pyarrow>=18.1",
 ]
 
 [tool.uv.sources]
 snowobs-common = { workspace = true }
 snowobs-semantics = { workspace = true }
-snowobs-ingest = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/snowobs_api"]
+packages = ["src/snowobs_ingest"]

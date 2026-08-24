@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from snowobs_api.routers import health, meta
+from snowobs_api.routers import datasets, health, meta
 from snowobs_common import __version__
 from snowobs_common.config import Settings, load_settings
 from snowobs_common.errors import AppError
@@ -74,6 +74,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(meta.router)
+    app.include_router(datasets.router)
     return app
 
 

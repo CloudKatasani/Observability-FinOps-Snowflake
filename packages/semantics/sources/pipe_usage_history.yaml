@@ -1,0 +1,26 @@
+id: pipe_usage_history
+snowflake_object: SNOWFLAKE.ACCOUNT_USAGE.PIPE_USAGE_HISTORY
+domain: pipeline
+criticality: important
+edition_min: standard
+required_db_role: SNOWFLAKE.USAGE_VIEWER
+documented_latency_minutes: 180
+retention_days: 365
+grain: [PIPE_ID, START_TIME]
+time_column: START_TIME
+watermark:
+  column: START_TIME
+  lookback_minutes: 180
+load_strategy: incremental_watermark
+csv:
+  header_signature: [PIPE_ID, PIPE_NAME, START_TIME, CREDITS_USED, BYTES_INSERTED, FILES_INSERTED]
+  aliases: [pipe_usage_history, pipe_usage, snowpipe_usage]
+columns:
+  - {name: START_TIME, type: timestamp_ltz, required: true}
+  - {name: END_TIME, type: timestamp_ltz, required: false}
+  - {name: PIPE_ID, type: string, required: true}
+  - {name: PIPE_NAME, type: string, required: true}
+  - {name: CREDITS_USED, type: number, required: true}
+  - {name: BYTES_INSERTED, type: number, required: true}
+  - {name: FILES_INSERTED, type: number, required: true}
+enables_metrics: [cost.serverless, cost.snowpipe, pipe.*]
