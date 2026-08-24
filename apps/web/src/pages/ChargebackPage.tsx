@@ -7,7 +7,12 @@ import ProvenanceBar from "@/components/Provenance";
 import ReconciliationBanner from "@/components/ReconciliationBanner";
 import { ErrorState, LoadingRegion } from "@/components/states";
 import type { SqlDisclosure, TeamCost } from "@/api/client";
-import { useAllocation, useMeta, useSourceIndex, useSources } from "@/hooks/useApi";
+import {
+  useAllocation,
+  useMeta,
+  useSourceIndex,
+  useSources,
+} from "@/hooks/useApi";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useScope } from "@/hooks/useScope";
 import { parseDecimal, toPlotNumber } from "@/lib/decimal";
@@ -24,7 +29,9 @@ function allocationSql(disclosures: readonly SqlDisclosure[]): string {
   return disclosures
     .map((disclosure) => {
       const sliced =
-        disclosure.dimensions.length > 0 ? ` by ${disclosure.dimensions.join(", ")}` : "";
+        disclosure.dimensions.length > 0
+          ? ` by ${disclosure.dimensions.join(", ")}`
+          : "";
       return [
         `-- ${disclosure.purpose}`,
         `-- ${disclosure.metrics.join(", ")}${sliced}`,
@@ -47,7 +54,7 @@ export default function ChargebackPage() {
   const meta = useMeta();
   const sources = useSources();
   const registry = useSourceIndex();
-  const allocation = useAllocation(range);
+  const allocation = useAllocation(range, scope);
   const palette = meta.data?.branding.palette ?? NEUTRAL_PALETTE;
 
   const data = allocation.data;
@@ -64,15 +71,20 @@ export default function ChargebackPage() {
   return (
     <PageFrame
       title="Team chargeback"
-      description={`Fully allocated cost by team for ${range.start} to ${range.end}, allocated across every landed account and published only behind the reconciliation gate.`}
+      description={`Fully allocated cost by team for ${range.start} to ${range.end}, ${
+        scope.scope === "account" && scope.account
+          ? `allocated within ${scope.account} and reconciled against that account's own bill`
+          : "allocated across every landed account and reconciled against the organization's bill"
+      }, published only behind the reconciliation gate.`}
       contributions={[data]}
       sources={sources.data}
     >
-      {scope.scope === "account" ? <OrganizationOnlyNotice account={scope.account} /> : null}
-
       {allocation.isPending ? (
         <Panel title="Reconciliation gate">
-          <LoadingRegion label="Running the allocation and its reconciliation" lines={4} />
+          <LoadingRegion
+            label="Running the allocation and its reconciliation"
+            lines={4}
+          />
         </Panel>
       ) : allocation.isError ? (
         <ErrorState
@@ -84,13 +96,16 @@ export default function ChargebackPage() {
       ) : !data ? (
         <Panel title="Reconciliation gate">
           <p className="rounded border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-700">
-            The allocation endpoint returned no body, so neither the gate's verdict nor any team
-            figure can be shown.
+            The allocation endpoint returned no body, so neither the gate's
+            verdict nor any team figure can be shown.
           </p>
         </Panel>
       ) : (
         <>
-          <ReconciliationBanner reconciliation={data.reconciliation} published={published} />
+          <ReconciliationBanner
+            reconciliation={data.reconciliation}
+            published={published}
+          />
 
           <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
             <Panel
@@ -119,19 +134,24 @@ export default function ChargebackPage() {
                     team: <span className="font-medium">{team.team}</span>,
                     direct: formatCredits(team.direct_credits, 1) ?? "unknown",
                     idle: formatCredits(team.idle_credits, 1) ?? "unknown",
-                    cloud: formatCredits(team.cloud_services_credits, 1) ?? "unknown",
+                    cloud:
+                      formatCredits(team.cloud_services_credits, 1) ??
+                      "unknown",
                     total: formatCredits(team.total_credits, 1) ?? "unknown",
                     cost:
                       formatFigure(team.cost_usd, "currency", 2, "USD") ??
                       "no credit price configured",
-                    share: formatFigure(team.share_of_total, "percent", 1) ?? "unknown",
+                    share:
+                      formatFigure(team.share_of_total, "percent", 1) ??
+                      "unknown",
                   }))}
                 />
               ) : (
                 <p className="rounded border border-dashed border-red-300 bg-red-50 p-4 text-sm text-red-950">
-                  No team figures are shown. The reconciliation gate above did not pass, and R6
-                  forbids publishing allocated cost that does not reconcile to the metered bill.
-                  Resolve the variance and re-run the allocation.
+                  No team figures are shown. The reconciliation gate above did
+                  not pass, and R6 forbids publishing allocated cost that does
+                  not reconcile to the metered bill. Resolve the variance and
+                  re-run the allocation.
                 </p>
               )}
               <ProvenanceBar
@@ -149,14 +169,20 @@ export default function ChargebackPage() {
               >
                 <p className="flex items-baseline gap-1.5">
                   <span className="text-2xl leading-none font-semibold tabular-nums text-slate-900">
-                    {formatFigure(data.unattributed_share, "percent", 1) ?? "unknown"}
+                    {formatFigure(data.unattributed_share, "percent", 1) ??
+                      "unknown"}
                   </span>
                 </p>
                 <p className="mt-2 text-xs text-slate-600">
                   Credit price:{" "}
                   <span className="tabular-nums">
                     {data.credit_price_usd
-                      ? (formatFigure(data.credit_price_usd, "currency", 4, "USD") ?? "unknown")
+                      ? (formatFigure(
+                          data.credit_price_usd,
+                          "currency",
+                          4,
+                          "USD",
+                        ) ?? "unknown")
                       : "not configured — costs are shown in credits only"}
                   </span>
                 </p>
@@ -181,13 +207,19 @@ export default function ChargebackPage() {
                       categories: chartTeams.map((team) => team.team),
                       series: COMPONENTS.map((component) => ({
                         name: component.label,
-                        values: chartTeams.map((team) => plot(component.pick(team))),
+                        values: chartTeams.map((team) =>
+                          plot(component.pick(team)),
+                        ),
                       })),
                       valueLabel: (seriesName, index) => {
                         const team = chartTeams[index];
-                        const component = COMPONENTS.find((entry) => entry.label === seriesName);
+                        const component = COMPONENTS.find(
+                          (entry) => entry.label === seriesName,
+                        );
                         if (!team || !component) return "unknown";
-                        return formatCredits(component.pick(team), 1) ?? "unknown";
+                        return (
+                          formatCredits(component.pick(team), 1) ?? "unknown"
+                        );
                       },
                     })}
                   />
@@ -204,39 +236,6 @@ export default function ChargebackPage() {
         </>
       )}
     </PageFrame>
-  );
-}
-
-/**
- * The allocation waterfall runs over the whole tenant: the chargeback endpoint
- * takes no account filter, and the gate reconciles against the account-day
- * metering total for every landed account together.
- *
- * Rendering these figures under an account's name in the scope picker would be
- * exactly the mis-scoping the scope filter exists to prevent — an organization
- * figure wearing an account's label, undetectable downstream. So the page says
- * plainly what it is showing instead, and keeps showing it.
- */
-function OrganizationOnlyNotice({ account }: { account: string | null }) {
-  return (
-    <section
-      role="note"
-      aria-label="Scope notice"
-      className="rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950"
-    >
-      <p className="font-semibold">
-        <span aria-hidden className="mr-1.5 font-bold">
-          !
-        </span>
-        These figures are organization-wide, not {account ?? "this account"}&rsquo;s.
-      </p>
-      <p className="mt-1">
-        The allocation waterfall and its reconciliation gate run over every landed account
-        together, so the chargeback endpoint cannot be narrowed to one account. Nothing below is
-        filtered to {account ?? "the selected account"}. Switch the scope filter back to
-        Organization to read this page as it is computed.
-      </p>
-    </section>
   );
 }
 

@@ -33,6 +33,8 @@ from snowobs_semantics.compiler import (
     TimeRange,
 )
 from snowobs_semantics.model import SemanticModel, TimeGrain
+from snowobs_semantics.registry import SourceRegistry, default_registry
+from snowobs_semantics.scope import Scope, ScopeRequest, assess
 
 logger = get_logger(__name__)
 
@@ -64,6 +66,23 @@ class ToolContext:
     #: Pinned context the user set in the UI (time range, team) — §12.1.
     default_time_range: TimeRange | None = None
     coverage: Any = None
+    #: Accounts this deployment can answer for, so `query_metric` can scope a
+    #: question to one of them — and refuse an account that does not exist
+    #: rather than returning the organization's figure under its name.
+    accounts: tuple[str, ...] = ()
+    #: The organization these accounts belong to, for labelling.
+    organization: str | None = None
+    #: Whether an organization-wide roll-up here spans every account. False
+    #: when billing names an account whose own detail never landed, which makes
+    #: every organization figure an under-count the agent must qualify.
+    missing_accounts: tuple[str, ...] = ()
+    #: Which engine is answering; the scope rules differ because LIVE reads one
+    #: account per connection and OFFLINE holds every account in one lake.
+    mode: str = "offline"
+    registry: SourceRegistry | None = None
+
+    def source_registry(self) -> SourceRegistry:
+        return self.registry or default_registry()
 
 
 @dataclass
@@ -127,6 +146,52 @@ def _to_filters(raw: Any) -> list[Filter]:
     return filters
 
 
+def _org_label(context: ToolContext) -> str:
+    return context.organization or "Organization"
+
+
+def _resolve_scope(
+    context: ToolContext, arguments: dict[str, Any], metric_ids: list[str]
+) -> tuple[ScopeRequest, ToolOutcome | None]:
+    """Which account this question is about, and whether it can be answered there.
+
+    Naming no account means the organization, which for a single-account
+    deployment is the same thing. Naming one runs the same verdict the
+    dashboards run, so a metric the UI refuses to scope to an account cannot be
+    scoped to one by asking an agent instead — the refusal carries the reason,
+    which is what the agent tells the user rather than answering at a scope it
+    was not asked for.
+    """
+    raw = arguments.get("account")
+    if not raw:
+        return ScopeRequest(), None
+
+    account = str(raw).strip()
+    if context.accounts and account not in context.accounts:
+        return ScopeRequest(), ToolOutcome(
+            content=(
+                f"'{account}' is not an account this deployment has data for. "
+                f"Accounts available: {', '.join(context.accounts)}. "
+                "Omit `account` to answer for the whole organization."
+            ),
+            is_error=True,
+        )
+
+    scope = ScopeRequest(scope=Scope.ACCOUNT, account=account)
+    registry = context.source_registry()
+    for metric_id in metric_ids:
+        verdict = assess(
+            context.model.metric(metric_id),
+            scope,
+            model=context.model,
+            registry=registry,
+            mode=context.mode,
+        )
+        if not verdict.available:
+            return scope, ToolOutcome(content=str(verdict.reason), is_error=True)
+    return scope, None
+
+
 def _query_metric(context: ToolContext, arguments: dict[str, Any]) -> ToolOutcome:
     """Run a governed metric query. The agent picks metrics, never SQL."""
     metric_ids = arguments.get("metrics") or []
@@ -150,6 +215,10 @@ def _query_metric(context: ToolContext, arguments: dict[str, Any]) -> ToolOutcom
             is_error=True,
         )
 
+    scope, scope_error = _resolve_scope(context, arguments, metric_ids)
+    if scope_error is not None:
+        return scope_error
+
     request = MetricRequest(
         metrics=list(metric_ids),
         dimensions=list(arguments.get("dimensions") or []),
@@ -159,6 +228,7 @@ def _query_metric(context: ToolContext, arguments: dict[str, Any]) -> ToolOutcom
         limit=min(int(arguments.get("limit") or 100), MAX_ROWS_TO_AGENT),
         bucket_time=bool(arguments.get("by_time", True)),
         rls_filters=context.rls_filters,
+        account=scope.account_filter,
     )
 
     from snowobs_semantics.dialect_shims import Dialect
@@ -189,6 +259,18 @@ def _query_metric(context: ToolContext, arguments: dict[str, Any]) -> ToolOutcom
                 else None
             ),
         },
+        # The scope travels with the figure. An agent that says "spend is
+        # $40k" without saying whether that is one account or twelve has
+        # mis-quoted the tool even though the number is exact — and a
+        # roll-up that is missing an account says so here rather than
+        # presenting an under-count as the total (R3).
+        "scope": scope.scope.value,
+        "scope_account": scope.account_filter,
+        "scope_label": scope.label() if scope.account_filter else _org_label(context),
+        "contributing_accounts": (
+            [scope.account] if scope.account_filter else list(context.accounts)
+        ),
+        "missing_accounts": ([] if scope.account_filter else list(context.missing_accounts)),
         "rows": rows,
         "row_count": result.row_count,
         "truncated": result.truncated,
@@ -309,6 +391,43 @@ def _get_coverage(context: ToolContext, arguments: dict[str, Any]) -> ToolOutcom
         if source.rows > 0 or source.criticality == "core"
     ]
     return ToolOutcome(content=json.dumps({"sources": sources}, indent=2))
+
+
+# ══════════════════════════════════════════════════════ list_accounts ════════
+def _list_accounts(context: ToolContext, arguments: dict[str, Any]) -> ToolOutcome:
+    """The accounts in this organization, and which of them have data.
+
+    An agent asked "which account is driving the increase?" needs to know the
+    fleet before it can slice by it. It also needs to know which accounts are
+    *absent*: an organization roll-up that silently omits an account would let
+    the agent report a total that is short by an account's worth of spend.
+    """
+    del arguments
+    if not context.accounts and not context.missing_accounts:
+        return ToolOutcome(
+            content=(
+                "This deployment has no per-account breakdown: no extract has been "
+                "stamped with an account. Every figure is for the single account "
+                "the platform is reading."
+            )
+        )
+    return ToolOutcome(
+        content=json.dumps(
+            {
+                "organization": _org_label(context),
+                "mode": context.mode,
+                "accounts_with_data": list(context.accounts),
+                "accounts_missing_data": list(context.missing_accounts),
+                "note": (
+                    "Pass one of accounts_with_data as `account` to query_metric to "
+                    "scope a figure to it. Organization-wide figures cover "
+                    "accounts_with_data only; if accounts_missing_data is non-empty, "
+                    "say so when quoting an organization total."
+                ),
+            },
+            indent=2,
+        )
+    )
 
 
 # ═══════════════════════════════════════════════════════ explain_delta ═══════
@@ -477,6 +596,16 @@ def build_registry() -> dict[str, Tool]:
                             "description": "False for a single total over the period.",
                         },
                         "limit": {"type": "integer"},
+                        "account": {
+                            "type": "string",
+                            "description": (
+                                "Answer for one Snowflake account instead of the whole "
+                                "organization. Omit for an organization-wide figure. "
+                                "Use list_accounts to see which accounts exist; a "
+                                "metric that has no per-account meaning will say so "
+                                "rather than answer."
+                            ),
+                        },
                     },
                     "required": ["metrics"],
                 },
@@ -527,6 +656,19 @@ def build_registry() -> dict[str, Tool]:
                 input_schema={"type": "object", "properties": {}},
             ),
             run=_get_coverage,
+        ),
+        "list_accounts": Tool(
+            spec=ToolSpec(
+                name="list_accounts",
+                description=(
+                    "List the Snowflake accounts in this organization, which of them "
+                    "have landed data, and which have not. Call this before scoping a "
+                    "question to an account, and before quoting an organization-wide "
+                    "total you intend to describe as complete."
+                ),
+                input_schema={"type": "object", "properties": {}},
+            ),
+            run=_list_accounts,
         ),
         "explain_delta": Tool(
             spec=ToolSpec(

@@ -20,8 +20,17 @@ from snowobs_common.errors import ConfigurationError
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
-#: Tools every specialist needs to answer anything at all.
-_BASE_TOOLS = ("query_metric", "list_metrics", "describe_metric", "get_coverage")
+#: Tools every specialist needs to answer anything at all. `list_accounts` is
+#: in the base set rather than the org specialist's: any specialist can be
+#: asked "and for the sandbox account?", and one that could not see the fleet
+#: would answer organization-wide under an account's name.
+_BASE_TOOLS = (
+    "query_metric",
+    "list_metrics",
+    "describe_metric",
+    "get_coverage",
+    "list_accounts",
+)
 
 _SPECIALISTS: dict[str, tuple[str, tuple[str, ...]]] = {
     "finops": (

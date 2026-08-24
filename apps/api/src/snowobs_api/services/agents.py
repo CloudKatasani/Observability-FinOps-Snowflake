@@ -23,7 +23,8 @@ from snowobs_agents.runtime.supervisor import (
 from snowobs_agents.runtime.tools import ToolContext
 from snowobs_agents.runtime.trace import Trace, TraceStore
 from snowobs_agents.specialists.registry import agent_names, all_agents, build_agent
-from snowobs_api.services.engines import EngineChoice, open_engine
+from snowobs_api.services.engines import EngineChoice, open_engine, resolve_mode
+from snowobs_api.services.metrics import MetricService
 from snowobs_common.config import Settings
 from snowobs_common.errors import ConfigurationError
 from snowobs_common.logging import get_logger
@@ -80,6 +81,11 @@ class AgentService:
             coverage=self._coverage(chosen, model),
             # §12.3: the ad-hoc hatch stays shut unless a deployment opens it.
             allow_adhoc_sql=self.settings.guardrails.allow_adhoc_sql,
+            # The fleet, so a question can be scoped to an account — and so an
+            # organization-wide answer knows whether it is complete. Resolved
+            # here with everything else the tools are allowed to see, rather
+            # than fetched from inside a tool.
+            **self._fleet(),
         )
         provider = build_provider(self.settings.llm, api_key=self._llm_api_key())
         return AgentRuntime(provider, context, budget=self._budget)
@@ -110,6 +116,24 @@ class AgentService:
                 detail=str(exc),
             )
             return None
+
+    def _fleet(self) -> dict[str, Any]:
+        """Which accounts exist, which have data, and which mode is answering.
+
+        Read through `MetricService` so the agent's idea of the fleet is the
+        same one the scope picker and the chargeback page use — three different
+        answers to "which accounts are there" would be three chances to quote a
+        roll-up as complete when it is not.
+        """
+        metrics = MetricService(self.settings, tenant=self.tenant)
+        landed = metrics.landed_accounts()
+        missing = sorted(set(metrics.organization_roster()) - set(landed))
+        return {
+            "accounts": tuple(landed),
+            "missing_accounts": tuple(missing),
+            "organization": self.settings.snowflake.organization,
+            "mode": resolve_mode(self.settings),
+        }
 
     @staticmethod
     def _coverage(chosen: EngineChoice, model: SemanticModel) -> Any:

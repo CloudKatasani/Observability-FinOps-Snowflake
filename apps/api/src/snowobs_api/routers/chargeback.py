@@ -7,11 +7,12 @@ chargeback without also seeing whether it reconciles.
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from snowobs_api.deps import SettingsDep
 from snowobs_api.services.chargeback import ChargebackService
+from snowobs_semantics.scope import Scope, ScopeRequest
 
 router = APIRouter(prefix="/api/v1/chargeback", tags=["chargeback"])
 
@@ -67,6 +68,23 @@ class AllocationResponse(BaseModel):
     sources: list[str]
     #: R5: an allocation is three queries, and all three are shown.
     sql: list[SqlDisclosure]
+    #: Where these figures were computed, in the same shape the metric
+    #: endpoints report it — so a page showing a KPI tile and a chargeback
+    #: table side by side can prove both are talking about the same accounts.
+    scope: str
+    scope_account: str | None
+    scope_partial: bool
+    contributing_accounts: list[str]
+    #: Accounts billing knows about that have landed nothing at account level.
+    #: An organization-wide chargeback missing one of these is under-counted,
+    #: and says so rather than presenting the shortfall as the whole bill.
+    missing_accounts: list[str] = Field(default_factory=list)
+
+
+def _scope_request(scope: Scope, account: str | None) -> ScopeRequest:
+    if scope is Scope.ACCOUNT and not account:
+        raise HTTPException(status_code=422, detail="scope=account requires an account name")
+    return ScopeRequest(scope=scope, account=account)
 
 
 @router.get("/allocation", response_model=AllocationResponse)
@@ -74,6 +92,8 @@ async def allocation(
     settings: SettingsDep,
     start: date | None = Query(default=None),
     end: date | None = Query(default=None),
+    scope: Scope = Query(default=Scope.ORGANIZATION),
+    account: str | None = Query(default=None),
 ) -> AllocationResponse:
     """Fully allocated cost by team, with the reconciliation verdict.
 
@@ -81,11 +101,25 @@ async def allocation(
     endpoints. The response always echoes `period_start` and `period_end`, so a
     default is reported rather than assumed — a caller never has to know the
     data window before it can ask a question about it.
+
+    `scope` narrows the allocation the same way the KPI endpoints narrow a
+    tile: `organization` allocates every account together, `account` allocates
+    one — including its reconciliation, which is checked against that account's
+    bill rather than the organization's.
     """
-    return ChargebackService(settings).allocation_response(start, end)
+    return ChargebackService(settings).allocation_response(
+        start, end, _scope_request(scope, account)
+    )
 
 
 @router.get("/reconciliation/{usage_date}", response_model=ReconciliationResponse)
-async def reconciliation(settings: SettingsDep, usage_date: date) -> ReconciliationResponse:
+async def reconciliation(
+    settings: SettingsDep,
+    usage_date: date,
+    scope: Scope = Query(default=Scope.ORGANIZATION),
+    account: str | None = Query(default=None),
+) -> ReconciliationResponse:
     """The stored reconciliation for one day — the artifact finance asks for."""
-    return ChargebackService(settings).reconciliation_response(usage_date, usage_date)
+    return ChargebackService(settings).reconciliation_response(
+        usage_date, usage_date, _scope_request(scope, account)
+    )

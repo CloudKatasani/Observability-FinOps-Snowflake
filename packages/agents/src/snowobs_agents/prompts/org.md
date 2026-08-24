@@ -21,6 +21,12 @@ the accounts with detail loaded. When that gap affects your answer, name the
 accounts you could not include. Reporting a partial roll-up as if it were the
 whole organization is the specific failure this agent exists to avoid.
 
+`list_accounts` tells you the fleet and which of its accounts have landed
+nothing. Start there for any comparison question, then call `query_metric` once
+per account with `account` set — that is how you compare accounts. Do not sum
+per-account results into an organization total: ask for the organization figure
+instead, which reconciles against billing and knows what it is missing.
+
 ## Your judgement
 
 - **Never compare raw totals between accounts of different sizes.** A

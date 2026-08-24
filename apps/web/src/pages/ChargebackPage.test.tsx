@@ -12,6 +12,7 @@ import {
 } from "@/test/fixtures";
 import { stubFetch } from "@/test/http";
 import { renderWithClient } from "@/test/render";
+import { ORGANIZATION_SCOPE, useScopeStore } from "@/store/scope";
 
 // ECharts needs a canvas; the figures it draws are asserted through the table
 // beside it, which is the accessible copy of the same data.
@@ -27,6 +28,7 @@ function stub(allocation: unknown) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  useScopeStore.setState(ORGANIZATION_SCOPE);
 });
 
 describe("ChargebackPage — the R6 gate", () => {
@@ -34,13 +36,19 @@ describe("ChargebackPage — the R6 gate", () => {
     stub(BLOCKED_ALLOCATION);
     renderWithClient(<ChargebackPage />);
 
-    const banner = await screen.findByRole("alert", { name: "Reconciliation gate" });
+    const banner = await screen.findByRole("alert", {
+      name: "Reconciliation gate",
+    });
     expect(banner).toBeInTheDocument();
     expect(
       screen.getByText("Blocked — chargeback figures are withheld"),
     ).toBeInTheDocument();
-    expect(screen.getByText(BLOCKED_ALLOCATION.reconciliation.banner)).toBeInTheDocument();
-    expect(screen.getByText(/R6 forbids publishing allocated cost/)).toBeInTheDocument();
+    expect(
+      screen.getByText(BLOCKED_ALLOCATION.reconciliation.banner),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/R6 forbids publishing allocated cost/),
+    ).toBeInTheDocument();
 
     // The payload carried team rows anyway. None of them may be rendered:
     // the gate's verdict decides, not the shape of the response.
@@ -59,7 +67,9 @@ describe("ChargebackPage — the R6 gate", () => {
     stub(BLOCKED_ALLOCATION);
     renderWithClient(<ChargebackPage />);
 
-    expect(await screen.findByText("Worst-variance days (1)")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Worst-variance days (1)"),
+    ).toBeInTheDocument();
     expect(screen.getByText("2026-08-18")).toBeInTheDocument();
     // The day's own variance, formatted from its decimal string.
     expect(screen.getByText("-73.259%")).toBeInTheDocument();
@@ -73,7 +83,9 @@ describe("ChargebackPage — the R6 gate", () => {
     expect(
       await screen.findByText("Reconciled — chargeback figures are published"),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("alert", { name: "Reconciliation gate" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("alert", { name: "Reconciliation gate" }),
+    ).not.toBeInTheDocument();
 
     expect(screen.getByText("TEAM_ML")).toBeInTheDocument();
     expect(screen.getByText("TEAM_ANALYTICS")).toBeInTheDocument();
@@ -88,7 +100,9 @@ describe("ChargebackPage — the R6 gate", () => {
     renderWithClient(<ChargebackPage />);
 
     expect(
-      await screen.findByText(/data no fresher than 8h \(QUERY_ATTRIBUTION_HISTORY\)/),
+      await screen.findByText(
+        /data no fresher than 8h \(QUERY_ATTRIBUTION_HISTORY\)/,
+      ),
     ).toBeInTheDocument();
   });
 
@@ -115,8 +129,59 @@ describe("ChargebackPage — the R6 gate", () => {
     });
     renderWithClient(<ChargebackPage />);
 
-    expect(await screen.findByText("Chargeback unavailable")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Chargeback unavailable"),
+    ).toBeInTheDocument();
     expect(screen.getByText(/WAREHOUSE_METERING_HISTORY/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Try again" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("ChargebackPage — scope", () => {
+  /** Every URL the page asked for, so the request itself can be asserted. */
+  function requestedUrls(): string[] {
+    return vi.mocked(fetch).mock.calls.map(([input]) => String(input));
+  }
+
+  it("asks for one account's allocation when an account is selected", async () => {
+    useScopeStore.getState().select({ scope: "account", account: "ACME_PROD" });
+    stub({
+      ...PUBLISHED_ALLOCATION,
+      scope: "account",
+      scope_account: "ACME_PROD",
+      contributing_accounts: ["ACME_PROD"],
+    });
+    renderWithClient(<ChargebackPage />);
+
+    // The figures must be the account's, not the organization's relabelled —
+    // which starts with the request carrying the scope at all.
+    await screen.findByText(TEAM_ROWS[0].team);
+    const allocationCall = requestedUrls().find((url) =>
+      url.includes("/api/v1/chargeback/allocation"),
+    );
+    expect(allocationCall).toContain("scope=account");
+    expect(allocationCall).toContain("account=ACME_PROD");
+    expect(
+      screen.getByText(
+        /allocated within ACME_PROD and reconciled against that account/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("allocates the whole organization when no account is selected", async () => {
+    stub(PUBLISHED_ALLOCATION);
+    renderWithClient(<ChargebackPage />);
+
+    await screen.findByText(TEAM_ROWS[0].team);
+    const allocationCall = requestedUrls().find((url) =>
+      url.includes("/api/v1/chargeback/allocation"),
+    );
+    expect(allocationCall).toContain("scope=organization");
+    expect(allocationCall).not.toContain("account=");
+    expect(
+      screen.getByText(/allocated across every landed account/),
+    ).toBeInTheDocument();
   });
 });

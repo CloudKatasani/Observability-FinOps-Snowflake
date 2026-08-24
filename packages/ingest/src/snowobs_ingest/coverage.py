@@ -45,6 +45,12 @@ class AccountCoverage(BaseModel):
     carry no account column to infer it from.
     """
 
+    #: The source this row is about. Redundant inside `SourceCoverage.accounts`,
+    #: which is already grouped by source, and load-bearing in
+    #: `CoverageMatrix.account_matrix`, where the rows are one account's view
+    #: *across* sources and a caller must not have to infer which is which from
+    #: list position.
+    source_id: str = ""
     account: str
     status: SourceStatus
     rows: int = 0
@@ -118,22 +124,36 @@ class CoverageMatrix(BaseModel):
         return next(s for s in self.sources if s.source_id == source_id)
 
     def account_matrix(self, account: str) -> list[AccountCoverage]:
-        """Every source's status for one account, in the matrix's source order.
+        """Every account-scoped source's status for one account, in source order.
 
         A source the account has landed nothing for reports MISSING for that
         account even when a sibling account has it — which is the whole point:
         "account X has query history, account Y only has billing" is a coverage
         answer, not a silence.
+
+        Organization-scoped sources are left out rather than reported missing.
+        `ORGANIZATION_USAGE` is exported once for the whole organization; an
+        account has not failed to upload it, and listing it here would put a
+        red row against every account for a source none of them owns.
         """
         rows: list[AccountCoverage] = []
         for source in self.sources:
+            if source.scope == SourceScope.ORGANIZATION.value:
+                continue
             existing = source.for_account(account)
             rows.append(
                 existing
                 if existing is not None
-                else AccountCoverage(account=account, status=SourceStatus.MISSING)
+                else AccountCoverage(
+                    source_id=source.source_id, account=account, status=SourceStatus.MISSING
+                )
             )
         return rows
+
+    @property
+    def account_scoped_sources(self) -> list[SourceCoverage]:
+        """The sources an individual account can be expected to land."""
+        return [s for s in self.sources if s.scope != SourceScope.ORGANIZATION.value]
 
     def data_window(self) -> tuple[date, date] | None:
         starts = [s.window_start for s in self.sources if s.window_start]
@@ -217,7 +237,16 @@ def build_source_coverage(
         status, rows, batches, window, freshness = _assess(source, stats, reference)
 
         per_account: list[AccountCoverage] = []
-        if known_accounts and stats is not None and catalog.has_account_column(source.id):
+        # An organization-scoped source has no per-account breakdown to report:
+        # it is one export covering every account, so listing each account
+        # against it would read as "every account is missing this" when in fact
+        # the source does not work that way.
+        if (
+            known_accounts
+            and stats is not None
+            and not source.is_organization_scoped
+            and catalog.has_account_column(source.id)
+        ):
             landed_for = set(catalog.accounts_for(source.id))
             for account in known_accounts:
                 account_stats = catalog.stats(source.id, account) if account in landed_for else None
@@ -226,6 +255,7 @@ def build_source_coverage(
                 )
                 per_account.append(
                     AccountCoverage(
+                        source_id=source.id,
                         account=account,
                         status=a_status,
                         rows=a_rows,

@@ -335,7 +335,7 @@ class AgentRuntime:
     # --------------------------------------------------- deterministic path
     def _run_deterministic(self, agent: AgentDefinition, question: str, trace: Trace) -> TurnResult:
         """No LLM: route to a tool, run it, report the result plainly (§19)."""
-        from snowobs_agents.runtime.routing import comparison_windows, route
+        from snowobs_agents.runtime.routing import account_named, comparison_windows, route
 
         available = {name: tool for name, tool in self.registry.items() if name in agent.tool_names}
 
@@ -404,16 +404,22 @@ class AgentRuntime:
                     answer=answer, trace=trace, grounded=True, tool_outputs=[delta.content]
                 )
 
-        call = ToolCall(
-            id="deterministic-1",
-            name="query_metric",
-            arguments={
-                "metrics": [routed.metric_id],
-                "dimensions": routed.dimensions,
-                "last_days": routed.last_days,
-                "by_time": False,
-            },
-        )
+        # A question that names one of the organization's accounts is a
+        # question about that account. Scoping here rather than answering
+        # organization-wide is what stops "what did ACME_SANDBOX spend?" from
+        # returning the fleet's total under the sandbox's name — and the tool
+        # refuses, with a reason, for any metric that has no per-account
+        # meaning, so this can never mis-scope a figure.
+        scoped_to = account_named(question, self.context.accounts)
+        arguments: dict[str, Any] = {
+            "metrics": [routed.metric_id],
+            "dimensions": routed.dimensions,
+            "last_days": routed.last_days,
+            "by_time": False,
+        }
+        if scoped_to:
+            arguments["account"] = scoped_to
+        call = ToolCall(id="deterministic-1", name="query_metric", arguments=arguments)
         outcome = self._invoke(call, available, trace)
 
         if outcome.is_error:
@@ -422,8 +428,9 @@ class AgentRuntime:
                 answer=outcome.content, trace=trace, refused=True, tool_outputs=[outcome.content]
             )
 
+        where = f" for {scoped_to}" if scoped_to else ""
         answer = (
-            f"{routed.metric_name}, over the window reported below:\n\n"
+            f"{routed.metric_name}{where}, over the window reported below:\n\n"
             f"{outcome.content}\n\n"
             f"Sources: {', '.join(outcome.sources)}. No figure here is fresher than "
             f"{outcome.latency_floor_minutes} minutes."

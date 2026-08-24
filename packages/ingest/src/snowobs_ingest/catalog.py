@@ -234,9 +234,17 @@ class DuckDBCatalog:
 
         An enterprise lake holds several accounts' extracts side by side; this
         is what tells the coverage page and the org roll-ups which they are.
+
+        Only *account-scoped* sources count. An ``ORGANIZATION_USAGE`` extract
+        is stamped too — it is exported once, from whichever account holds the
+        grant — but that stamp names the organization, and the organization is
+        not an account anyone can select a per-account view of. Counting it
+        would put "ACME_GROUP" in the account picker beside its own members.
         """
         found: set[str] = set()
         for source_id in self.landed_sources():
+            if self.registry.get(source_id).is_organization_scoped:
+                continue
             found.update(self.accounts_for(source_id))
         return sorted(found)
 

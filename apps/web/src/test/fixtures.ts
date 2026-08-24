@@ -9,7 +9,12 @@ export const META = {
   branding: {
     display_name: "Observability & FinOps Platform for Snowflake",
     short_name: "snowobs",
-    palette: { navy: "#12446E", primary: "#0070AD", sky: "#12ABDB", coral: "#E94B89" },
+    palette: {
+      navy: "#12446E",
+      primary: "#0070AD",
+      sky: "#12ABDB",
+      coral: "#E94B89",
+    },
   },
 };
 
@@ -160,7 +165,8 @@ export const PASSING_RECONCILIATION = {
   variance_pct: "0.008413773351507286697226293727",
   tolerance_pct: "0.5",
   publication_allowed: true,
-  banner: "Reconciled: allocated 14997.08 credits vs metered 14995.82 (+0.008%), within ±0.5%.",
+  banner:
+    "Reconciled: allocated 14997.08 credits vs metered 14995.82 (+0.008%), within ±0.5%.",
   ran_at: "2026-08-24T03:02:46.150979Z",
   worst_days: [
     {
@@ -223,21 +229,35 @@ export const PUBLISHED_ALLOCATION = {
   credit_price_usd: "3.00",
   reconciliation: PASSING_RECONCILIATION,
   figures_published: true,
+  // The allocation reports its scope like every other figure: this one covers
+  // two accounts, and names them, so a reader can tell an organization-wide
+  // chargeback from one account's.
+  scope: "organization",
+  scope_account: null,
+  scope_partial: false,
+  contributing_accounts: ["ACME_ANALYTICS", "ACME_PROD"],
+  missing_accounts: [],
   as_of: "2026-08-24T14:32:00Z",
   // §15: an allocation is a composite of three metric queries, and it reports
   // the least favourable provenance of its parts rather than the best.
   provisional: false,
   latency_floor_minutes: 480,
-  sources: ["warehouse_metering_history", "query_attribution_history", "metering_daily_history"],
+  sources: [
+    "warehouse_metering_history",
+    "query_attribution_history",
+    "metering_daily_history",
+  ],
   sql: [
     {
-      purpose: "Metered credits per warehouse-day — the pool each warehouse's cost is allocated from.",
+      purpose:
+        "Metered credits per warehouse-day — the pool each warehouse's cost is allocated from.",
       metrics: ["cost.by_warehouse_credits"],
       dimensions: ["warehouse"],
       sql: 'SELECT SUM("CREDITS_USED") AS "COST_BY_WAREHOUSE_CREDITS" FROM warehouse_metering_history',
     },
     {
-      purpose: "Attributed credits per team — the direct component of the waterfall.",
+      purpose:
+        "Attributed credits per team — the direct component of the waterfall.",
       metrics: ["cost.by_team_credits"],
       dimensions: ["team", "warehouse"],
       sql: 'SELECT SUM("CREDITS_ATTRIBUTED") AS "COST_BY_TEAM_CREDITS" FROM query_attribution_history',

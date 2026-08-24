@@ -19,6 +19,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from snowobs_api.services.engines import EngineChoice, open_engine
+from snowobs_api.services.metrics import MetricService
 from snowobs_common.config import Settings
 from snowobs_common.errors import DataUnavailableError
 from snowobs_engines.base import QueryResult
@@ -38,6 +39,7 @@ from snowobs_semantics.compiler import (
     TimeRange,
 )
 from snowobs_semantics.model import TimeGrain
+from snowobs_semantics.scope import Scope, ScopeRequest
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from snowobs_api.routers.chargeback import (
@@ -83,6 +85,11 @@ class ChargebackService:
         self.settings = settings
         self.tenant = tenant
         self.compiler = SemanticCompiler()
+        #: Scope questions — which accounts landed, which the organization
+        #: contains — are answered by the metric service rather than
+        #: re-implemented here, so chargeback and the KPI tiles cannot disagree
+        #: about what an account is or when a roll-up is partial.
+        self._metrics = MetricService(settings, tenant=tenant)
         #: Every query this run compiled, so the response can show its own SQL
         #: (R5) and derive provenance from what actually ran rather than from a
         #: constant written next to the response model.
@@ -93,10 +100,13 @@ class ChargebackService:
         return open_engine(self.settings, tenant=self.tenant)
 
     # ------------------------------------------------------------- gathering
-    def _warehouse_days(self, chosen: EngineChoice, start: date, end: date) -> list[WarehouseDay]:
+    def _warehouse_days(
+        self, chosen: EngineChoice, start: date, end: date, account: str | None
+    ) -> list[WarehouseDay]:
         request = MetricRequest(
             metrics=["cost.by_warehouse_credits"],
             dimensions=["warehouse"],
+            account=account,
             grain=TimeGrain.DAY,
             time_range=TimeRange(start=start, end=end),
             limit=50_000,
@@ -112,12 +122,15 @@ class ChargebackService:
             if row.get("WAREHOUSE") and row.get("TIME_BUCKET")
         ]
 
-    def _query_costs(self, chosen: EngineChoice, start: date, end: date) -> list[QueryCost]:
+    def _query_costs(
+        self, chosen: EngineChoice, start: date, end: date, account: str | None
+    ) -> list[QueryCost]:
         # The team dimension already applies the query-tag rule of the waterfall;
         # rows carrying UNATTRIBUTED fall through to the remaining rules below.
         request = MetricRequest(
             metrics=["cost.by_team_credits"],
             dimensions=["team", "warehouse", "user", "role"],
+            account=account,
             grain=TimeGrain.DAY,
             time_range=TimeRange(start=start, end=end),
             limit=50_000,
@@ -139,9 +152,12 @@ class ChargebackService:
             )
         return costs
 
-    def _cloud_services(self, chosen: EngineChoice, start: date, end: date) -> dict[date, Decimal]:
+    def _cloud_services(
+        self, chosen: EngineChoice, start: date, end: date, account: str | None
+    ) -> dict[date, Decimal]:
         request = MetricRequest(
             metrics=["cost.cloud_services_credits"],
+            account=account,
             grain=TimeGrain.DAY,
             time_range=TimeRange(start=start, end=end),
             limit=10_000,
@@ -153,10 +169,18 @@ class ChargebackService:
             if row.get("TIME_BUCKET")
         }
 
-    def _metered_by_day(self, chosen: EngineChoice, start: date, end: date) -> dict[date, Decimal]:
-        """The billed figure the gate reconciles against (R6)."""
+    def _metered_by_day(
+        self, chosen: EngineChoice, start: date, end: date, account: str | None
+    ) -> dict[date, Decimal]:
+        """The billed figure the gate reconciles against (R6).
+
+        Scoped exactly like the allocation it checks: reconciling one account's
+        allocated credits against the whole organization's bill would report a
+        gaping variance and block publication for a figure that is correct.
+        """
         request = MetricRequest(
             metrics=["cost.by_warehouse_credits"],
+            account=account,
             grain=TimeGrain.DAY,
             time_range=TimeRange(start=start, end=end),
             limit=10_000,
@@ -203,7 +227,9 @@ class ChargebackService:
         return provisional, latency_floor, sources, disclosures
 
     # --------------------------------------------------------------- results
-    def _default_window(self, chosen: EngineChoice) -> tuple[date, date] | None:
+    def _default_window(
+        self, chosen: EngineChoice, account: str | None = None
+    ) -> tuple[date, date] | None:
         """The period to allocate when the caller names no dates.
 
         The two modes answer this differently because the question means
@@ -222,7 +248,10 @@ class ChargebackService:
             return None
         starts, ends = [], []
         for source_id in REQUIRED_SOURCES:
-            stats = catalog.stats(source_id)
+            # One account's extracts can cover a different window from its
+            # siblings', so an account-scoped allocation defaults to *that*
+            # account's landed window rather than the fleet's.
+            stats = catalog.stats(source_id, account) if account else catalog.stats(source_id)
             if stats is not None and stats.window is not None:
                 starts.append(stats.window[0])
                 ends.append(stats.window[1])
@@ -233,19 +262,25 @@ class ChargebackService:
         return max(starts), min(ends)
 
     def allocate(
-        self, start: date | None, end: date | None
+        self,
+        start: date | None,
+        end: date | None,
+        scope: ScopeRequest | None = None,
     ) -> tuple[AllocationResult, ReconciliationRun, date, date]:
+        scope = scope or ScopeRequest()
+        account = self._resolve_account(scope)
         self._compiled.clear()
         with self._engine() as chosen:
             if start is None or end is None:
-                landed = self._default_window(chosen)
+                landed = self._default_window(chosen, account)
                 if landed is None:
                     # R3: no inputs is not a zero-cost account, and the caller
                     # gets told which sources are missing rather than an
                     # allocation of nothing.
+                    whose = f" for {account}" if account else ""
                     raise DataUnavailableError(
                         "Chargeback needs "
-                        f"{' and '.join(REQUIRED_SOURCES)} to be landed; neither is. "
+                        f"{' and '.join(REQUIRED_SOURCES)} to be landed{whose}; neither is. "
                         "Upload an extract, or check the coverage page for the "
                         "remediation for each."
                     )
@@ -254,18 +289,65 @@ class ChargebackService:
 
             engine = AllocationEngine(registry=self._registry())
             allocation = engine.allocate(
-                self._warehouse_days(chosen, start, end),
-                self._query_costs(chosen, start, end),
-                cloud_services_credits=self._cloud_services(chosen, start, end),
+                self._warehouse_days(chosen, start, end, account),
+                self._query_costs(chosen, start, end, account),
+                cloud_services_credits=self._cloud_services(chosen, start, end, account),
             )
             run = reconcile(
                 allocation,
-                self._metered_by_day(chosen, start, end),
+                self._metered_by_day(chosen, start, end, account),
                 tolerance_pct=self.settings.finops.reconcile_tolerance_pct,
                 period_start=start,
                 period_end=end,
             )
             return allocation, run, start, end
+
+    # ----------------------------------------------------------------- scope
+    def _resolve_account(self, scope: ScopeRequest) -> str | None:
+        """The account filter for this request, or None for the organization.
+
+        An account scope is checked against what has actually landed before any
+        query runs. Allocating an account the lake has never seen would produce
+        an empty waterfall that reconciles perfectly against an empty bill — a
+        green gate over a chargeback of nothing, which is exactly the "zero for
+        unknown" R3 forbids.
+        """
+        if scope.scope is not Scope.ACCOUNT or not scope.account:
+            return None
+        known = self._metrics.landed_accounts()
+        if known and scope.account not in known:
+            raise DataUnavailableError(
+                f"No chargeback inputs have landed for {scope.account}. "
+                f"Accounts with data: {', '.join(known)}."
+            )
+        return scope.account
+
+    def _scope_fields(self, scope: ScopeRequest) -> dict[str, Any]:
+        """Where these figures were computed, in the metric endpoints' shape.
+
+        Account scope reports no missing accounts: one account's allocation is
+        complete when that account's data has landed, whatever its siblings have
+        done. Organization scope is partial exactly when billing names an
+        account whose own extracts never arrived — the same test the KPI tiles
+        apply, asked through the same service.
+        """
+        if scope.scope is Scope.ACCOUNT and scope.account:
+            return {
+                "scope": scope.scope.value,
+                "scope_account": scope.account,
+                "scope_partial": False,
+                "contributing_accounts": [scope.account],
+                "missing_accounts": [],
+            }
+        landed = self._metrics.landed_accounts()
+        missing = sorted(set(self._metrics.organization_roster()) - set(landed))
+        return {
+            "scope": Scope.ORGANIZATION.value,
+            "scope_account": None,
+            "scope_partial": bool(missing),
+            "contributing_accounts": landed,
+            "missing_accounts": missing,
+        }
 
     def _registry(self) -> TeamRegistry:
         """Role/user/warehouse mappings.
@@ -277,11 +359,15 @@ class ChargebackService:
         return TeamRegistry()
 
     def allocation_response(
-        self, start: date | None = None, end: date | None = None
+        self,
+        start: date | None = None,
+        end: date | None = None,
+        scope: ScopeRequest | None = None,
     ) -> AllocationResponse:
         from snowobs_api.routers.chargeback import AllocationResponse, TeamCost
 
-        allocation, run, start, end = self.allocate(start, end)
+        scope = scope or ScopeRequest()
+        allocation, run, start, end = self.allocate(start, end, scope)
         provisional, latency_floor, sources, disclosures = self._provenance()
         price = self.settings.finops.credit_price_usd
         totals = allocation.by_team()
@@ -330,10 +416,13 @@ class ChargebackService:
             latency_floor_minutes=latency_floor,
             sources=sources,
             sql=disclosures,
+            **self._scope_fields(scope),
         )
 
-    def reconciliation_response(self, start: date, end: date) -> ReconciliationResponse:
-        _, run, _resolved_start, _resolved_end = self.allocate(start, end)
+    def reconciliation_response(
+        self, start: date, end: date, scope: ScopeRequest | None = None
+    ) -> ReconciliationResponse:
+        _, run, _resolved_start, _resolved_end = self.allocate(start, end, scope)
         return self._to_response(run)
 
     @staticmethod

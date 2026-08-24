@@ -91,14 +91,19 @@ export type ScopeOptions = z.infer<typeof scopeOptionsSchema>;
 
 /**
  * What a page collects to drive its freshness and scope banners: provenance
- * always, and the scope fields from those endpoints that report them. The
- * allocation and coverage endpoints do not yet, so the scope half is optional
+ * always, and the scope fields from those endpoints that report them. Coverage
+ * describes the lake rather than a figure, so the scope half stays optional
  * rather than faked.
  */
 export type ProvenanceContribution = Provenance & Partial<ScopeContext>;
 
 /** A single cell of a metric result set: Decimals arrive as strings. */
-export const cellSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+export const cellSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+]);
 export type Cell = z.infer<typeof cellSchema>;
 
 export const figureFormatSchema = z.enum([
@@ -110,33 +115,41 @@ export const figureFormatSchema = z.enum([
   "integer",
 ]);
 
-export const directionSchema = z.enum(["lower_is_better", "higher_is_better", "neutral"]);
+export const directionSchema = z.enum([
+  "lower_is_better",
+  "higher_is_better",
+  "neutral",
+]);
 
 // -------------------------------------------------------------------- metrics
 
-export const metricQueryResponseSchema = provenanceSchema.merge(scopeContextSchema).extend({
-  metrics: z.array(z.string()),
-  columns: z.array(z.string()),
-  rows: z.array(z.array(cellSchema)),
-  row_count: z.number(),
-  truncated: z.boolean(),
-  sql: z.string(),
-});
+export const metricQueryResponseSchema = provenanceSchema
+  .merge(scopeContextSchema)
+  .extend({
+    metrics: z.array(z.string()),
+    columns: z.array(z.string()),
+    rows: z.array(z.array(cellSchema)),
+    row_count: z.number(),
+    truncated: z.boolean(),
+    sql: z.string(),
+  });
 export type MetricQueryResponse = z.infer<typeof metricQueryResponseSchema>;
 
-export const metricTileSchema = provenanceSchema.merge(scopeContextSchema).extend({
-  metric_id: z.string(),
-  name: z.string(),
-  value: cellSchema,
-  format_type: figureFormatSchema,
-  format_decimals: z.number(),
-  unit: z.string().nullish(),
-  direction: directionSchema,
-  sql: z.string(),
-  allocation_method: z.string().nullish(),
-  //: Set when the metric cannot be computed — R3: say why, never show zero.
-  unavailable_reason: z.string().nullish(),
-});
+export const metricTileSchema = provenanceSchema
+  .merge(scopeContextSchema)
+  .extend({
+    metric_id: z.string(),
+    name: z.string(),
+    value: cellSchema,
+    format_type: figureFormatSchema,
+    format_decimals: z.number(),
+    unit: z.string().nullish(),
+    direction: directionSchema,
+    sql: z.string(),
+    allocation_method: z.string().nullish(),
+    //: Set when the metric cannot be computed — R3: say why, never show zero.
+    unavailable_reason: z.string().nullish(),
+  });
 export type MetricTile = z.infer<typeof metricTileSchema>;
 
 export const filterOperatorSchema = z.enum([
@@ -222,27 +235,38 @@ export const sqlDisclosureSchema = z.object({
 });
 export type SqlDisclosure = z.infer<typeof sqlDisclosureSchema>;
 
-export const allocationSchema = provenanceSchema.extend({
-  period_start: z.string(),
-  period_end: z.string(),
-  mode: z.string(),
-  teams: z.array(teamCostSchema),
-  unattributed_share: z.string(),
-  credit_price_usd: z.string().nullable(),
-  reconciliation: reconciliationSchema,
-  //: R6 — the gate's verdict. False means the figures are withheld.
-  figures_published: z.boolean(),
-  //: R5 — an allocation is several metric queries, and all of them are shown.
-  sql: z.array(sqlDisclosureSchema),
-});
+export const allocationSchema = provenanceSchema
+  .merge(scopeContextSchema)
+  .extend({
+    period_start: z.string(),
+    period_end: z.string(),
+    mode: z.string(),
+    teams: z.array(teamCostSchema),
+    unattributed_share: z.string(),
+    credit_price_usd: z.string().nullable(),
+    reconciliation: reconciliationSchema,
+    //: R6 — the gate's verdict. False means the figures are withheld.
+    figures_published: z.boolean(),
+    //: R5 — an allocation is several metric queries, and all of them are shown.
+    sql: z.array(sqlDisclosureSchema),
+  });
 export type Allocation = z.infer<typeof allocationSchema>;
 
 // ------------------------------------------------------------------ coverage
 
-export const sourceStatusSchema = z.enum(["available", "stale", "empty", "missing"]);
+export const sourceStatusSchema = z.enum([
+  "available",
+  "stale",
+  "empty",
+  "missing",
+]);
 export type SourceStatus = z.infer<typeof sourceStatusSchema>;
 
-export const metricAvailabilitySchema = z.enum(["enabled", "degraded", "unavailable"]);
+export const metricAvailabilitySchema = z.enum([
+  "enabled",
+  "degraded",
+  "unavailable",
+]);
 
 /** How a source is exported: once per account, or once for the whole fleet. */
 export const sourceScopeSchema = z.enum(["account", "organization"]);
@@ -326,7 +350,8 @@ export const problemDetailSchema = z.object({
 export type ProblemDetail = z.infer<typeof problemDetailSchema>;
 
 /** A metric that cannot be answered at the requested scope, per `services/scope.py`. */
-export const SCOPE_UNAVAILABLE_PROBLEM = "https://snowobs.dev/problems/scope-unavailable";
+export const SCOPE_UNAVAILABLE_PROBLEM =
+  "https://snowobs.dev/problems/scope-unavailable";
 
 export class ApiError extends Error {
   constructor(
@@ -347,7 +372,9 @@ export class ApiError extends Error {
  * alarm.
  */
 export function isScopeUnavailable(error: unknown): error is ApiError {
-  return error instanceof ApiError && error.problemType === SCOPE_UNAVAILABLE_PROBLEM;
+  return (
+    error instanceof ApiError && error.problemType === SCOPE_UNAVAILABLE_PROBLEM
+  );
 }
 
 /**
@@ -357,18 +384,31 @@ export function isScopeUnavailable(error: unknown): error is ApiError {
  * the sentence R3 exists to show — "this metric describes the whole
  * organization" reads very differently from "422".
  */
-async function failure(method: string, path: string, response: Response): Promise<ApiError> {
+async function failure(
+  method: string,
+  path: string,
+  response: Response,
+): Promise<ApiError> {
   const fallback = `${method} ${path} failed with ${response.status}`;
   try {
     const problem = problemDetailSchema.parse(await response.json());
-    return new ApiError(response.status, problem.detail ?? problem.title, problem.type);
+    return new ApiError(
+      response.status,
+      problem.detail ?? problem.title,
+      problem.type,
+    );
   } catch {
     return new ApiError(response.status, fallback);
   }
 }
 
-async function getJson(path: string, allowStatuses: number[] = []): Promise<unknown> {
-  const response = await fetch(path, { headers: { accept: "application/json" } });
+async function getJson(
+  path: string,
+  allowStatuses: number[] = [],
+): Promise<unknown> {
+  const response = await fetch(path, {
+    headers: { accept: "application/json" },
+  });
   if (!response.ok && !allowStatuses.includes(response.status)) {
     throw await failure("GET", path, response);
   }
@@ -406,8 +446,12 @@ export async function fetchScopeOptions(): Promise<ScopeOptions> {
 }
 
 /** Run a governed metric query. Rows come back with the SQL that produced them. */
-export async function queryMetrics(request: MetricQueryRequest): Promise<MetricQueryResponse> {
-  return metricQueryResponseSchema.parse(await postJson("/api/v1/metrics/query", request));
+export async function queryMetrics(
+  request: MetricQueryRequest,
+): Promise<MetricQueryResponse> {
+  return metricQueryResponseSchema.parse(
+    await postJson("/api/v1/metrics/query", request),
+  );
 }
 
 /** One KPI tile. An unavailable metric explains itself instead of returning 0. */
@@ -421,20 +465,31 @@ export async function fetchMetricTile(
     query.set("scope", scope.scope);
     // Only an account scope names an account; sending an empty one would make
     // the API reject a request the user never made.
-    if (scope.scope === "account" && scope.account) query.set("account", scope.account);
+    if (scope.scope === "account" && scope.account)
+      query.set("account", scope.account);
   }
   return metricTileSchema.parse(
-    await getJson(`/api/v1/metrics/${encodeURIComponent(metricId)}/tile?${query}`),
+    await getJson(
+      `/api/v1/metrics/${encodeURIComponent(metricId)}/tile?${query}`,
+    ),
   );
 }
 
 /** Allocated cost by team, behind the reconciliation gate (R6). */
-export async function fetchAllocation(range: {
-  start: string;
-  end: string;
-}): Promise<Allocation> {
+export async function fetchAllocation(
+  range: { start: string; end: string },
+  scope?: { scope: ScopeKind; account: string | null },
+): Promise<Allocation> {
   const query = new URLSearchParams({ start: range.start, end: range.end });
-  return allocationSchema.parse(await getJson(`/api/v1/chargeback/allocation?${query}`));
+  if (scope) {
+    query.set("scope", scope.scope);
+    // As for a tile: only an account scope names an account.
+    if (scope.scope === "account" && scope.account)
+      query.set("account", scope.account);
+  }
+  return allocationSchema.parse(
+    await getJson(`/api/v1/chargeback/allocation?${query}`),
+  );
 }
 
 /** The R3 coverage matrix: what landed, how fresh, and what to do about gaps. */
@@ -486,18 +541,25 @@ export type AgentAnswer = z.infer<typeof agentAnswerSchema>;
 
 /** The specialists available and the tools each may reach for (§12.2). */
 export async function fetchAgents(): Promise<AgentInfo[]> {
-  return z.array(agentInfoSchema).parse(await getJson("/api/v1/agents/catalog"));
+  return z
+    .array(agentInfoSchema)
+    .parse(await getJson("/api/v1/agents/catalog"));
 }
 
 /** Ask one question. The supervisor routes it unless an agent is named. */
-export async function askAgent(question: string, agent?: string): Promise<AgentAnswer> {
+export async function askAgent(
+  question: string,
+  agent?: string,
+): Promise<AgentAnswer> {
   return agentAnswerSchema.parse(
     await postJson("/api/v1/agents/ask", { question, agent: agent ?? null }),
   );
 }
 
 /** One event from the streaming endpoint: a trace step, or the final answer. */
-export const agentStreamEventSchema = z.object({ event: z.string() }).passthrough();
+export const agentStreamEventSchema = z
+  .object({ event: z.string() })
+  .passthrough();
 export type AgentStreamEvent = z.infer<typeof agentStreamEventSchema>;
 
 /**

@@ -24,7 +24,6 @@ import pytest
 
 from snowobs_api.main import create_app
 from snowobs_api.services.metrics import MetricService
-from snowobs_api.services.scope import Scope, ScopeRequest, assess
 from snowobs_common.config import Settings
 from snowobs_fixtures.organization import (
     OrganizationConfig,
@@ -34,6 +33,7 @@ from snowobs_fixtures.organization import (
 from snowobs_ingest.loader import IngestPipeline
 from snowobs_semantics.model import default_model
 from snowobs_semantics.registry import default_registry
+from snowobs_semantics.scope import Scope, ScopeRequest, assess
 
 ORG = OrganizationConfig(days=7)
 
@@ -323,3 +323,98 @@ async def test_a_metric_that_cannot_narrow_explains_itself_rather_than_widening(
     assert tile["value"] is None
     assert tile["unavailable_reason"]
     assert tile["scope"] == "account"
+
+
+# ──────────────────────────────────────────────────────────── scoped chargeback
+@pytest.mark.asyncio
+async def test_chargeback_allocates_one_account_and_reconciles_against_its_own_bill(
+    settings: Settings,
+) -> None:
+    """An account's chargeback is checked against that account's metering.
+
+    Reconciling one account's allocated credits against the organization's bill
+    would report a variance of most of the fleet and block publication for a
+    figure that is correct — which is R6 firing on a scope mismatch rather than
+    on a real allocation error.
+    """
+    async with client_for(settings) as client:
+        org = (await client.get("/api/v1/chargeback/allocation")).json()
+        prod = (
+            await client.get("/api/v1/chargeback/allocation?scope=account&account=ACME_PROD")
+        ).json()
+
+    assert prod["scope"] == "account"
+    assert prod["scope_account"] == "ACME_PROD"
+    assert prod["contributing_accounts"] == ["ACME_PROD"]
+    assert prod["missing_accounts"] == []
+    assert prod["reconciliation"]["publication_allowed"]
+    assert prod["figures_published"]
+
+    # The account's own allocation reconciles against the account's own bill,
+    # and both are a strict part of the organization's.
+    assert Decimal(prod["reconciliation"]["metered_credits"]) > 0
+    assert Decimal(prod["reconciliation"]["metered_credits"]) < Decimal(
+        org["reconciliation"]["metered_credits"]
+    )
+    assert org["scope"] == "organization"
+    assert org["scope_account"] is None
+    assert sorted(org["contributing_accounts"]) == [
+        "ACME_ANALYTICS",
+        "ACME_APAC",
+        "ACME_PROD",
+        "ACME_SANDBOX",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_every_accounts_chargeback_adds_up_to_the_organizations(
+    settings: Settings,
+) -> None:
+    """The scoped figures are a partition of the organization's, not samples of it."""
+    accounts = ("ACME_PROD", "ACME_ANALYTICS", "ACME_SANDBOX", "ACME_APAC")
+    async with client_for(settings) as client:
+        org = (await client.get("/api/v1/chargeback/allocation")).json()
+        per_account = [
+            (await client.get(f"/api/v1/chargeback/allocation?scope=account&account={a}")).json()
+            for a in accounts
+        ]
+
+    metered = sum(Decimal(body["reconciliation"]["metered_credits"]) for body in per_account)
+    assert metered == Decimal(org["reconciliation"]["metered_credits"])
+
+
+@pytest.mark.asyncio
+async def test_chargeback_refuses_an_account_it_has_no_data_for(settings: Settings) -> None:
+    """R3: an unknown account is named as unknown, not allocated as zero.
+
+    An empty waterfall reconciles perfectly against an empty bill, so the gate
+    would go green over a chargeback of nothing.
+    """
+    async with client_for(settings) as client:
+        response = await client.get("/api/v1/chargeback/allocation?scope=account&account=ACME_NOPE")
+        missing_account = await client.get("/api/v1/chargeback/allocation?scope=account")
+
+    assert response.status_code == 422
+    assert "ACME_NOPE" in response.text
+    assert "ACME_PROD" in response.text  # names the accounts that do have data
+    assert missing_account.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_coverage_and_the_scope_selector_agree_on_what_an_account_is(
+    settings: Settings, organization_lake: tuple[Path, str]
+) -> None:
+    """Two endpoints, one definition of the fleet.
+
+    They disagreed once: coverage counted the organization's own extracts as an
+    account, the picker did not. A page reading both then had to choose which
+    to believe, and any workaround it applied would be a second definition.
+    """
+    _lake, organization = organization_lake
+    async with client_for(settings) as client:
+        coverage = (await client.get("/api/v1/datasets/coverage")).json()
+        scopes = (await client.get("/api/v1/metrics/scopes")).json()
+
+    selectable = [o["value"] for o in scopes["options"] if o["scope"] == "account"]
+    assert coverage["accounts"] == selectable
+    assert organization not in coverage["accounts"]

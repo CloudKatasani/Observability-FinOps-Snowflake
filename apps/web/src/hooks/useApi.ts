@@ -29,12 +29,20 @@ import type { DateRange } from "@/store/timeRange";
 
 /** Branding and deployment metadata. Stable for the life of a deployment. */
 export function useMeta(): UseQueryResult<Meta> {
-  return useQuery({ queryKey: ["meta"], queryFn: fetchMeta, staleTime: 5 * 60_000 });
+  return useQuery({
+    queryKey: ["meta"],
+    queryFn: fetchMeta,
+    staleTime: 5 * 60_000,
+  });
 }
 
 /** The source registry — documented latencies for the freshness banner (R7). */
 export function useSources(): UseQueryResult<SourceSummary[]> {
-  return useQuery({ queryKey: ["sources"], queryFn: fetchSources, staleTime: 5 * 60_000 });
+  return useQuery({
+    queryKey: ["sources"],
+    queryFn: fetchSources,
+    staleTime: 5 * 60_000,
+  });
 }
 
 /** Source id → definition, for labelling provenance and ranking staleness. */
@@ -48,7 +56,11 @@ export function useSourceIndex(): Map<string, SourceSummary> {
 }
 
 export function useCoverage(): UseQueryResult<CoverageMatrix> {
-  return useQuery({ queryKey: ["coverage"], queryFn: fetchCoverage, staleTime: 60_000 });
+  return useQuery({
+    queryKey: ["coverage"],
+    queryFn: fetchCoverage,
+    staleTime: 60_000,
+  });
 }
 
 /** The organization/account scopes on offer, and what each can answer (§9). */
@@ -74,7 +86,14 @@ export function useMetricTile(
   scope: ScopeSelection,
 ): UseQueryResult<MetricTile> {
   return useQuery({
-    queryKey: ["tile", metricId, range.start, range.end, scope.scope, scope.account],
+    queryKey: [
+      "tile",
+      metricId,
+      range.start,
+      range.end,
+      scope.scope,
+      scope.account,
+    ],
     queryFn: () => fetchMetricTile(metricId, range, scope),
   });
 }
@@ -96,9 +115,25 @@ export function useMetricQuery(
   });
 }
 
-export function useAllocation(range: DateRange): UseQueryResult<Allocation> {
+/**
+ * The allocation at the selected scope.
+ *
+ * The scope is in the key for the same reason it is in a tile's: an account
+ * switch must not leave the previous account's chargeback on screen under the
+ * new account's name while the refetch is in flight.
+ */
+export function useAllocation(
+  range: DateRange,
+  scope: ScopeSelection,
+): UseQueryResult<Allocation> {
   return useQuery({
-    queryKey: ["allocation", range.start, range.end],
-    queryFn: () => fetchAllocation(range),
+    queryKey: [
+      "allocation",
+      range.start,
+      range.end,
+      scope.scope,
+      scope.account,
+    ],
+    queryFn: () => fetchAllocation(range, scope),
   });
 }

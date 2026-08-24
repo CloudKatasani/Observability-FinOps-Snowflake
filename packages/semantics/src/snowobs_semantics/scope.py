@@ -1,5 +1,12 @@
 """Organization or account: which scope a figure is being asked for (§9, R3).
 
+This lives in the semantic package rather than in the API because the question
+"can this metric answer at this scope?" is a property of the metric and its
+sources, not of the transport asking. The dashboards, the chargeback engine and
+the agents all reach the same verdict because they all call this one function —
+an agent that could scope a metric the UI refuses to scope would be able to
+present a figure the platform considers mis-labelled.
+
 An enterprise reads the same catalogue at two levels, and the two are not
 interchangeable:
 

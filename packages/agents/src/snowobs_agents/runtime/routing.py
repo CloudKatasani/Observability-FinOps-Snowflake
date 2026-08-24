@@ -15,6 +15,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -523,6 +524,29 @@ def _named_month_window(question: str, reference: date) -> ComparisonWindows | N
         period_b_end=b_end,
         basis=f"{a_start:%B} ({a_start} to {a_end}) against {b_start:%B} ({b_start} to {b_end})",
     )
+
+
+def account_named(question: str, accounts: Sequence[str]) -> str | None:
+    """The account this question names, when it names exactly one of ours.
+
+    Deliberately strict. Naming two accounts ("compare PROD and SANDBOX") is
+    not a request to scope to either of them, and naming none is a question
+    about the organization — in both cases the answer stays organization-wide,
+    where the response reports every contributing account and the reader can
+    see the breakdown for themselves. Guessing which of two accounts was meant
+    would put one account's figure under a question about both.
+    """
+    if not accounts:
+        return None
+    lowered = question.lower()
+    found = {
+        account
+        for account in accounts
+        # Word-bounded so an account called PROD is not matched inside
+        # "production", and escaped because an account name is data here.
+        if re.search(rf"(?<![a-z0-9_]){re.escape(account.lower())}(?![a-z0-9_])", lowered)
+    }
+    return found.pop() if len(found) == 1 else None
 
 
 def route(question: str, model: SemanticModel, *, threshold: float = 0.8) -> RoutedQuestion | None:

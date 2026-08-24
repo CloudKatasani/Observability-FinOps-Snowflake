@@ -98,9 +98,13 @@ def test_account_stamp_is_populated_and_queryable(lake) -> None:
 
 def test_catalog_exposes_the_accounts_in_the_lake(lake, organization) -> None:
     catalog, _storage, _pipeline = lake
-    assert catalog.accounts() == sorted(
-        set(organization.accounts) | {organization.organization_name}
-    )
+    # The organization is not one of its own accounts. Its extracts are stamped
+    # — ORGANIZATION_USAGE is exported once, from whichever account holds the
+    # grant — but that stamp names the organization, and offering it in the
+    # account picker beside its own members would invite a per-account view of
+    # something that has no per-account meaning.
+    assert catalog.accounts() == sorted(organization.accounts)
+    assert organization.organization_name not in catalog.accounts()
     # Account-scoped views come from the accounts; org-scoped views come from
     # the organization account, and the two sets do not overlap.
     assert catalog.accounts_for("query_history") == sorted(organization.accounts)
@@ -219,7 +223,9 @@ def test_coverage_reports_status_per_account(lake, organization) -> None:
     catalog, _storage, _pipeline = lake
     matrix = build_coverage_matrix(catalog, mode="offline", as_of=AS_OF)
 
-    assert matrix.accounts == sorted(set(organization.accounts) | {organization.organization_name})
+    # The organization is not an account: the picker and this matrix agree on
+    # the fleet, and neither offers ACME_GROUP as somewhere to look.
+    assert matrix.accounts == sorted(organization.accounts)
     query_history = matrix.source("query_history")
     assert query_history.scope == SourceScope.ACCOUNT.value
     by_account = {entry.account: entry for entry in query_history.accounts}
@@ -227,8 +233,6 @@ def test_coverage_reports_status_per_account(lake, organization) -> None:
     for name, account in organization.accounts.items():
         assert by_account[name].status is SourceStatus.AVAILABLE
         assert by_account[name].rows == account.row_count("query_history")
-    # The organization account has no query history of its own.
-    assert by_account[organization.organization_name].status is SourceStatus.MISSING
 
     # The aggregate row keeps its original, whole-tenant meaning.
     assert query_history.rows == sum(
@@ -241,23 +245,26 @@ def test_organization_scoped_sources_report_against_the_organization(lake, organ
     matrix = build_coverage_matrix(catalog, mode="offline", as_of=AS_OF)
     contract = matrix.source("contract_items")
     assert contract.scope == SourceScope.ORGANIZATION.value
-    landed = [a for a in contract.accounts if a.status is not SourceStatus.MISSING]
-    assert [a.account for a in landed] == [organization.organization_name]
+    assert contract.status is SourceStatus.AVAILABLE
+    assert contract.rows > 0
+    # One export covers every account, so there is no per-account breakdown to
+    # report. Listing each account against it would read as "every account is
+    # missing this" for a source no account owns.
+    assert contract.accounts == []
+    assert organization.organization_name not in matrix.accounts
 
 
 def test_account_matrix_answers_what_one_account_is_missing(lake, organization) -> None:
     catalog, _storage, _pipeline = lake
     matrix = build_coverage_matrix(catalog, mode="offline", as_of=AS_OF)
     rows = matrix.account_matrix("ACME_PROD")
-    assert len(rows) == len(matrix.sources)
+    assert len(rows) == len(matrix.account_scoped_sources)
     assert all(row.account == "ACME_PROD" for row in rows)
-    landed = {
-        source.source_id
-        for source, row in zip(matrix.sources, rows, strict=True)
-        if row.status is not SourceStatus.MISSING
-    }
+    landed = {row.source_id for row in rows if row.status is not SourceStatus.MISSING}
     assert "query_history" in landed
-    assert "contract_items" not in landed  # exported from the organization account
+    # Organization-scoped sources are not an account's to land, so they are
+    # absent from an account's matrix rather than red in it.
+    assert "contract_items" not in {row.source_id for row in rows}
 
 
 def test_partial_account_is_reported_as_partial_not_absent(

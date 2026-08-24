@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 from snowobs_api.services.engines import EngineChoice, open_engine, resolve_mode
-from snowobs_api.services.scope import Scope, ScopeRequest, ScopeVerdict, assess
 from snowobs_common.config import Settings
 from snowobs_common.errors import AppError, ScopeUnavailableError
 from snowobs_common.logging import get_logger
@@ -24,6 +23,7 @@ from snowobs_engines.cache import ResultCache
 from snowobs_semantics.compiler import ACCOUNT_DIMENSION, MetricRequest, SemanticCompiler
 from snowobs_semantics.model import Metric, default_model
 from snowobs_semantics.registry import default_registry
+from snowobs_semantics.scope import Scope, ScopeRequest, ScopeVerdict, assess
 
 
 @dataclass
@@ -139,15 +139,14 @@ class MetricService:
         Only names that have landed *account-scoped* data count. The
         organization's own extracts are stamped too — `ORGANIZATION_USAGE` is
         exported once, from whichever account holds the grant — and that name
-        is the organization, not an account you can select. Offering
-        "ACME_GROUP" alongside its four accounts would invite a per-account
-        view of something that has no per-account meaning.
+        is the organization, not an account you can select. Excluding it is the
+        catalog's job rather than this service's, so the scope picker and the
+        coverage matrix cannot drift into disagreeing about what an account is:
+        both read `catalog.accounts()`.
         """
         if self._accounts_cache is not None:
             return list(self._accounts_cache)
 
-        registry = default_registry()
-        account_scoped = {source.id for source in registry if not source.is_organization_scoped}
         with self._engine() as chosen:
             catalog = getattr(chosen.engine, "catalog", None)
             if catalog is None or not hasattr(catalog, "accounts"):
@@ -158,11 +157,7 @@ class MetricService:
                 ]
                 return list(self._accounts_cache)
 
-            found: set[str] = set()
-            for source_id in catalog.landed_sources():
-                if source_id in account_scoped:
-                    found.update(catalog.accounts_for(source_id))
-            self._accounts_cache = sorted(found)
+            self._accounts_cache = list(catalog.accounts())
             return list(self._accounts_cache)
 
     def organization_roster(self) -> list[str]:

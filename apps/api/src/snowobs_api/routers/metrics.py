@@ -16,10 +16,10 @@ from pydantic import BaseModel, Field, model_validator
 from snowobs_api.deps import SettingsDep
 from snowobs_api.services.engines import resolve_mode
 from snowobs_api.services.metrics import MetricService
-from snowobs_api.services.scope import Scope, ScopeRequest
 from snowobs_common.errors import AppError
 from snowobs_semantics.compiler import Filter, MetricRequest, Order, TimeRange
 from snowobs_semantics.model import TimeGrain
+from snowobs_semantics.scope import Scope, ScopeRequest
 
 router = APIRouter(prefix="/api/v1/metrics", tags=["metrics"])
 
