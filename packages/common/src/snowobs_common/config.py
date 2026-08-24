@@ -15,7 +15,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from snowobs_common.errors import ConfigurationError
@@ -62,8 +62,45 @@ class LLMSettings(BaseModel):
     api_key_ref: str | None = None
 
 
+class SnowflakeAccountSettings(BaseModel):
+    """One Snowflake account the platform reads.
+
+    An enterprise runs many accounts under one organization, and the platform
+    needs a connection per account to see anything below the billing line:
+    `ORGANIZATION_USAGE` rolls every account up but carries no queries, users,
+    or tables, so query-level observability exists only where an account has
+    been connected.
+    """
+
+    #: How this account is named in `ORGANIZATION_USAGE` — the join key between
+    #: the org roll-up and this account's own detail. Getting it wrong shows up
+    #: as an account that appears twice in the organization view, so it is
+    #: matched rather than assumed.
+    name: str
+    account: str
+    user: str
+    auth: Literal["keypair", "oauth", "pat", "externalbrowser"] = "keypair"
+    private_key_ref: str | None = None
+    role: str | None = None
+    warehouse: str | None = None
+    host: str | None = None
+    #: True for the one account whose connection reads `ORGANIZATION_USAGE`.
+    #: Only an account with ORGADMIN-granted access can, so this is a property
+    #: of one connection, not of all of them.
+    organization_reader: bool = False
+    enabled: bool = True
+
+
 class SnowflakeSettings(BaseModel):
     """LIVE-mode connection defaults. Secrets are referenced, never stored inline."""
+
+    #: The organization these accounts belong to, as `ORGANIZATION_USAGE` names
+    #: it. Used to check that a roll-up is not silently mixing organizations.
+    organization: str | None = None
+    #: Every account the platform reads. When empty, the single-account fields
+    #: below are used instead, so an existing single-account deployment keeps
+    #: working untouched.
+    accounts: list[SnowflakeAccountSettings] = Field(default_factory=list)
 
     account: str | None = None
     user: str | None = None
@@ -73,6 +110,66 @@ class SnowflakeSettings(BaseModel):
     warehouse: str | None = None
     query_tag_prefix: str = "SNOWOBS"
     statement_timeout_s: int = Field(default=300, ge=1)
+
+    def configured_accounts(self) -> list[SnowflakeAccountSettings]:
+        """Every account to read, however the deployment was configured.
+
+        A single-account deployment sets the flat fields and never mentions
+        `accounts`; an organization sets `accounts` and leaves the flat fields
+        alone. Both arrive here as a list, so no caller has to know which style
+        was used — and the single-account case stays exactly one account rather
+        than becoming a special path through every consumer.
+        """
+        if self.accounts:
+            return [account for account in self.accounts if account.enabled]
+        if not (self.account and self.user):
+            return []
+        return [
+            SnowflakeAccountSettings(
+                # With nothing else to go on, the account identifier is also
+                # its name. An organization deployment names them explicitly.
+                name=self.account,
+                account=self.account,
+                user=self.user,
+                auth=self.auth,
+                private_key_ref=self.private_key_ref,
+                role=self.role,
+                warehouse=self.warehouse,
+                # A lone account is the only candidate for reading the
+                # organization views, and it may or may not be granted them —
+                # the probe reports which, rather than this guessing.
+                organization_reader=True,
+            )
+        ]
+
+    def account_named(self, name: str) -> SnowflakeAccountSettings | None:
+        return next((a for a in self.configured_accounts() if a.name == name), None)
+
+    def organization_reader(self) -> SnowflakeAccountSettings | None:
+        """The connection that reads `ORGANIZATION_USAGE`, if one is designated."""
+        return next(
+            (a for a in self.configured_accounts() if a.organization_reader),
+            None,
+        )
+
+    @model_validator(mode="after")
+    def _accounts_are_coherent(self) -> SnowflakeSettings:
+        names = [account.name for account in self.accounts]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(
+                f"snowflake.accounts has duplicate names: {duplicates}. Names are "
+                "the join key to ORGANIZATION_USAGE, so a duplicate would double-count "
+                "that account in every organization roll-up."
+            )
+        readers = [a.name for a in self.accounts if a.organization_reader and a.enabled]
+        if len(readers) > 1:
+            raise ValueError(
+                f"More than one account is marked organization_reader: {readers}. "
+                "ORGANIZATION_USAGE returns the whole organization from any account "
+                "granted it, so reading it twice would double every org-level figure."
+            )
+        return self
 
 
 class FinOpsSettings(BaseModel):

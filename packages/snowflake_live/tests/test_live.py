@@ -26,6 +26,7 @@ from snowobs_live.probe import (
     PROBE_WINDOW_DAYS,
     ProbeStatus,
     probe_all,
+    probe_organization,
     probe_source,
 )
 from snowobs_live.provisioning import (
@@ -370,3 +371,112 @@ class _SelectiveRunner:
         if any(prefix.upper() in upper for prefix in self.blocked_prefixes):
             raise self.error
         return [(NOW, 10)]
+
+
+# ═══════════════════════════════════════════ organization-wide probing ═══════
+def _org_runner(*, organization_granted: bool) -> FakeRunner:
+    """An account that may or may not hold ORGANIZATION_USAGE."""
+    denied = Exception("SQL compilation error: Object does not exist or not authorized")
+    responses: dict[str, Any] = {
+        "MAX(": [(datetime.now(tz=UTC), 1_000)],
+    }
+    if not organization_granted:
+        responses["ORGANIZATION_USAGE"] = denied
+    return FakeRunner(responses)
+
+
+def test_an_organization_probe_reports_each_account_separately() -> None:
+    """The enterprise onboarding question: which accounts can you see, how deeply?
+
+    A single overall percentage would hide the shape that matters — billing
+    rolling up from one account while another has no detail at all.
+    """
+    report = probe_organization(
+        {
+            "ACME_PROD": _org_runner(organization_granted=True),
+            "ACME_ANALYTICS": _org_runner(organization_granted=False),
+        },
+        organization="ACME_GROUP",
+        organization_reader="ACME_PROD",
+    )
+
+    assert [r.account for r in report.accounts] == ["ACME_PROD", "ACME_ANALYTICS"]
+    prod = report.account("ACME_PROD")
+    analytics = report.account("ACME_ANALYTICS")
+    assert prod is not None and analytics is not None
+    # The account holding ORGANIZATION_USAGE sees strictly more than the one
+    # that does not, and the report shows the difference per account.
+    assert prod.coverage_pct > analytics.coverage_pct
+    assert report.organization_wide_sources_available
+
+
+def test_an_account_that_is_billed_but_not_connected_is_named() -> None:
+    """The gap most easily mistaken for "that account is quiet".
+
+    An unconnected account still appears in every billing roll-up, so its spend
+    is counted while its queries are invisible. Saying nothing would let a
+    reviewer read the silence as an idle account.
+    """
+    report = probe_organization(
+        {"ACME_PROD": _org_runner(organization_granted=True)},
+        organization="ACME_GROUP",
+        organization_reader="ACME_PROD",
+        known_accounts=["ACME_PROD", "ACME_ANALYTICS", "ACME_DEV"],
+    )
+
+    assert report.unconnected_accounts == ["ACME_ANALYTICS", "ACME_DEV"]
+    summary = report.summary()
+    assert "ACME_ANALYTICS" in summary and "ACME_DEV" in summary
+    assert "spend is counted" in summary
+
+
+def test_an_organization_with_no_usage_grant_says_roll_ups_are_unavailable() -> None:
+    """R3: an unavailable capability explains itself and names the fix."""
+    report = probe_organization(
+        {"ACME_PROD": _org_runner(organization_granted=False)},
+        organization="ACME_GROUP",
+        organization_reader="ACME_PROD",
+    )
+    assert not report.organization_wide_sources_available
+    assert "ORGANIZATION_USAGE_VIEWER" in report.summary()
+
+
+def test_an_unreachable_account_is_counted_but_not_treated_as_covered() -> None:
+    report = probe_organization(
+        {"ACME_PROD": _org_runner(organization_granted=True)},
+        organization="ACME_GROUP",
+        organization_reader="ACME_PROD",
+        unreachable={"ACME_EU": "connection timed out"},
+        known_accounts=["ACME_PROD", "ACME_EU"],
+    )
+    assert report.unreachable_accounts == {"ACME_EU": "connection timed out"}
+    # It is not reported as an unconnected account: it *is* configured, it just
+    # did not answer. Those need different remedies.
+    assert report.unconnected_accounts == []
+    assert "1 of 2 configured account(s) reachable" in report.summary()
+
+
+def test_a_freshness_row_of_an_unexpected_shape_does_not_crash_the_probe() -> None:
+    """Onboarding must degrade, not raise, over a connection that works."""
+    runner = FakeRunner({"MAX(": [(1,)]})  # one column where two are expected
+    report = probe_all(runner, account="ACME_PROD")
+    assert report.accessible  # still readable
+    assert all(probe.freshness_minutes is None for probe in report.sources)
+
+
+def test_a_declared_source_scope_agrees_with_the_schema_it_reads() -> None:
+    """Two statements of the same fact must not be allowed to drift apart.
+
+    A source declaring itself account-scoped while reading
+    `ORGANIZATION_USAGE` would make the organization probe report cross-account
+    roll-ups as unavailable when they work, or the reverse — and neither shows
+    up as an error anywhere.
+    """
+    from snowobs_live.probe import _is_organization_scoped
+    from snowobs_semantics.registry import default_registry
+
+    for source in default_registry():
+        by_object = "ORGANIZATION_USAGE" in source.snowflake_object.upper()
+        assert _is_organization_scoped(source.id) == by_object, (
+            f"{source.id} declares a scope that disagrees with {source.snowflake_object}"
+        )

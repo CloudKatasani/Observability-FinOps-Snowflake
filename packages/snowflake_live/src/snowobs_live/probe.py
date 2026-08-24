@@ -13,6 +13,7 @@ retention window.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -188,7 +189,11 @@ def probe_source(
         probe.error = str(exc).split("\n")[0][:300]
         return probe
 
-    if rows and rows[0]:
+    if rows and len(rows[0]) >= 2:
+        # Indexed defensively: this runs on the onboarding screen, and an
+        # unexpected row shape there should degrade to "readable, freshness
+        # unknown" rather than raise an IndexError over a connection that is
+        # in fact working.
         newest, count = rows[0][0], rows[0][1]
         probe.row_count = int(count) if count is not None else None
         if isinstance(newest, datetime):
@@ -248,3 +253,139 @@ class ConnectionRunner:
             return list(cursor.fetchall())
         finally:
             cursor.close()
+
+
+@dataclass
+class OrganizationProbeReport:
+    """What the platform can see across an entire organization.
+
+    An enterprise's first question on connecting is not "does this work" but
+    "which of my accounts can you actually see, and how deeply". The answer is
+    rarely uniform: billing rolls up from one account granted
+    `ORGANIZATION_USAGE`, while query-level detail exists only where an account
+    has its own connection and grants. Reporting a single overall percentage
+    would hide exactly the gaps an onboarding team needs to close.
+    """
+
+    probed_at: datetime
+    organization: str | None
+    #: Per account, in the order they were probed.
+    accounts: list[CoverageAndGrantsReport] = field(default_factory=list)
+    #: The account whose connection reads ORGANIZATION_USAGE, if any succeeded.
+    organization_reader: str | None = None
+    #: Accounts named in ORGANIZATION_USAGE that have no connection configured.
+    #: These appear in every billing roll-up and in no detail view, which is the
+    #: gap most likely to be mistaken for "that account is quiet".
+    unconnected_accounts: list[str] = field(default_factory=list)
+    #: Accounts whose connection could not be opened at all, with the reason.
+    unreachable_accounts: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def organization_wide_sources_available(self) -> bool:
+        """Can the platform answer any organization-level question at all?"""
+        if self.organization_reader is None:
+            return False
+        report = self.account(self.organization_reader)
+        return report is not None and any(
+            probe.usable for probe in report.sources if _is_organization_scoped(probe.source_id)
+        )
+
+    def account(self, name: str) -> CoverageAndGrantsReport | None:
+        return next((report for report in self.accounts if report.account == name), None)
+
+    def summary(self) -> str:
+        if not self.accounts and not self.unreachable_accounts:
+            return "No Snowflake account is configured, so nothing was probed."
+
+        reachable = len(self.accounts)
+        total = reachable + len(self.unreachable_accounts)
+        parts = [f"{reachable} of {total} configured account(s) reachable."]
+
+        if self.organization_wide_sources_available:
+            parts.append(f"Organization-wide billing reads from {self.organization_reader}.")
+        else:
+            parts.append(
+                "No account can read ORGANIZATION_USAGE, so cross-account roll-ups "
+                "are unavailable — grant ORGANIZATION_USAGE_VIEWER to one account's role."
+            )
+
+        if self.unconnected_accounts:
+            parts.append(
+                f"{len(self.unconnected_accounts)} account(s) appear in the organization "
+                f"but have no connection: {', '.join(sorted(self.unconnected_accounts))}. "
+                "Their spend is counted; their queries are not visible."
+            )
+        return " ".join(parts)
+
+
+def _is_organization_scoped(source_id: str) -> bool:
+    """Does this source return the whole organization rather than one account?
+
+    Decided by the schema the view lives in: `SNOWFLAKE.ORGANIZATION_USAGE.*`
+    spans every account and `SNOWFLAKE.ACCOUNT_USAGE.*` never does. A declared
+    `scope` on the source is preferred when one exists, and a test asserts the
+    two agree — a declaration disagreeing with the object name would be the
+    more misleading of the two, since the object name is where rows come from.
+    """
+    from snowobs_semantics.registry import default_registry
+
+    try:
+        source = default_registry().get(source_id)
+    except Exception:
+        return False
+    declared = getattr(source, "scope", None)
+    if declared is not None:
+        return str(getattr(declared, "value", declared)) == "organization"
+    return "ORGANIZATION_USAGE" in source.snowflake_object.upper()
+
+
+def probe_organization(
+    runners: Mapping[str, SqlRunner],
+    *,
+    organization: str | None = None,
+    organization_reader: str | None = None,
+    registry: SourceRegistry | None = None,
+    roles: Mapping[str, str | None] | None = None,
+    unreachable: Mapping[str, str] | None = None,
+    known_accounts: Sequence[str] = (),
+    now: datetime | None = None,
+) -> OrganizationProbeReport:
+    """Probe every connected account and report the organization's coverage.
+
+    ``runners`` maps account name to an open runner; ``known_accounts`` is what
+    `ORGANIZATION_USAGE` says the organization contains, so the report can name
+    the accounts that are billed but invisible.
+    """
+    registry = registry or default_registry()
+    reference = now or datetime.now(tz=UTC)
+    roles = roles or {}
+
+    reports = [
+        probe_all(
+            runner,
+            registry,
+            account=name,
+            role=roles.get(name),
+            now=reference,
+        )
+        for name, runner in runners.items()
+    ]
+
+    reader = organization_reader if organization_reader in runners else None
+    connected = set(runners) | set(unreachable or {})
+    missing = sorted(set(known_accounts) - connected)
+
+    logger.info(
+        "organization_probe_complete",
+        accounts_probed=len(reports),
+        unreachable=len(unreachable or {}),
+        unconnected=len(missing),
+    )
+    return OrganizationProbeReport(
+        probed_at=reference,
+        organization=organization,
+        accounts=reports,
+        organization_reader=reader,
+        unconnected_accounts=missing,
+        unreachable_accounts=dict(unreachable or {}),
+    )

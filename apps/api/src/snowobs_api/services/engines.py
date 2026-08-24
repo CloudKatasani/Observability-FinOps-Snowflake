@@ -41,6 +41,10 @@ class EngineChoice:
     #: Populated when LIVE was configured but could not be used, so the caller
     #: can say so rather than presenting landed data as live (R3).
     fell_back_because: str | None = None
+    #: Which Snowflake account this engine reads, when it reads exactly one.
+    #: None in OFFLINE, where a single lake can hold several accounts and the
+    #: account is a filter on the query rather than a property of the engine.
+    account: str | None = None
 
 
 def live_is_configured(settings: Settings) -> bool:
@@ -70,6 +74,7 @@ def open_engine(
     tenant: str = "default",
     cache: ResultCache | None = None,
     storage_root: Path | None = None,
+    account: str | None = None,
 ) -> Iterator[EngineChoice]:
     """Yield the engine for this deployment, closing whatever it opened.
 
@@ -82,8 +87,13 @@ def open_engine(
     if mode == "live":
         fallback = _live_unavailable_reason(settings)
         if fallback is None:
-            engine = _build_live_engine(settings, tenant=tenant, cache=cache)
-            yield EngineChoice(engine=engine, dialect=Dialect.SNOWFLAKE, mode="live")
+            engine = _build_live_engine(settings, tenant=tenant, cache=cache, account=account)
+            yield EngineChoice(
+                engine=engine,
+                dialect=Dialect.SNOWFLAKE,
+                mode="live",
+                account=_account_settings(settings, account).name,
+            )
             return
         if settings.mode == "live":
             # Explicitly configured for LIVE: refuse rather than answer from
@@ -133,18 +143,22 @@ def _live_unavailable_reason(settings: Settings) -> str | None:
     return None
 
 
-def _build_live_engine(settings: Settings, *, tenant: str, cache: ResultCache | None) -> Any:
+def _build_live_engine(
+    settings: Settings, *, tenant: str, cache: ResultCache | None, account: str | None = None
+) -> Any:
     from snowobs_live.connection import AuthMethod, ConnectionProfile, SnowflakeConnector
     from snowobs_live.engine import SnowflakeEngine
 
     snowflake = settings.snowflake
+    chosen = _account_settings(settings, account)
     profile = ConnectionProfile(
-        account=str(snowflake.account),
-        user=str(snowflake.user),
-        auth=AuthMethod(snowflake.auth),
-        secret_ref=snowflake.private_key_ref,
-        role=snowflake.role,
-        warehouse=snowflake.warehouse,
+        account=chosen.account,
+        user=chosen.user,
+        auth=AuthMethod(chosen.auth),
+        secret_ref=chosen.private_key_ref,
+        role=chosen.role,
+        warehouse=chosen.warehouse,
+        host=chosen.host,
         query_tag_prefix=snowflake.query_tag_prefix,
         statement_timeout_s=snowflake.statement_timeout_s,
     )
@@ -154,6 +168,33 @@ def _build_live_engine(settings: Settings, *, tenant: str, cache: ResultCache | 
         cache=cache,
         tenant=tenant,
     )
+
+
+def _account_settings(settings: Settings, account: str | None) -> Any:
+    """The connection to use, named or default.
+
+    An unnamed request in an organization goes to the account that reads
+    `ORGANIZATION_USAGE`, because that is the only connection whose answers are
+    organization-wide. Falling back to "the first one configured" would answer
+    an org question from whichever account happened to be listed first, which
+    is wrong in a way nothing downstream could detect.
+    """
+    accounts = settings.snowflake.configured_accounts()
+    if not accounts:
+        raise ConfigurationError("No Snowflake account is configured for LIVE mode.")
+
+    if account is None:
+        return settings.snowflake.organization_reader() or accounts[0]
+
+    chosen = settings.snowflake.account_named(account)
+    if chosen is None:
+        known = ", ".join(a.name for a in accounts) or "none"
+        raise ConfigurationError(
+            f"No connection is configured for account '{account}'. Configured: {known}. "
+            "An account present in ORGANIZATION_USAGE still needs its own connection "
+            "before the platform can read anything below the billing line."
+        )
+    return chosen
 
 
 def _storage_root(settings: Settings) -> Path:
