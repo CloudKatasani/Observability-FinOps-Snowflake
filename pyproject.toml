@@ -25,7 +25,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["apps/api", "apps/worker", "packages/common", "packages/semantics", "packages/ingest", "packages/engines", "packages/sqlguard", "packages/agents", "packages/llm", "packages/analytics", "packages/products", "packages/artifacts", "packages/finops", "packages/snowflake_live", "fixtures/generator"]
+src = ["apps/api", "apps/worker", "packages/common", "packages/semantics", "packages/ingest", "packages/engines", "packages/sqlguard", "packages/agents", "packages/llm", "packages/analytics", "packages/products", "packages/artifacts", "packages/finops", "packages/snowflake_live", "packages/analytics", "fixtures/generator"]
 
 [tool.ruff.lint]
 select = [
@@ -59,6 +59,9 @@ known-first-party = ["snowobs_common", "snowobs_api", "snowobs_worker", "snowobs
 # The capability probe composes tiny SELECTs from source-registry identifiers,
 # each vetted by _vet() against a bare-identifier pattern before interpolation.
 "packages/snowflake_live/src/snowobs_live/probe.py" = ["S608"]
+# to_snowflake_alert_ddl renders ALERT DDL for a customer to review and run in
+# their own account; the rule's identifiers are validated at construction.
+"packages/analytics/src/snowobs_analytics/alerting.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.12"
@@ -78,7 +81,7 @@ module = ["pyarrow.*", "duckdb.*", "polars.*", "arq.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["snowobs_common.*", "snowobs_semantics.*", "snowobs_ingest.*", "snowobs_sqlguard.*", "snowobs_engines.*", "snowobs_finops.*", "snowobs_live.*"]
+module = ["snowobs_common.*", "snowobs_semantics.*", "snowobs_ingest.*", "snowobs_sqlguard.*", "snowobs_engines.*", "snowobs_finops.*", "snowobs_live.*", "snowobs_analytics.*"]
 strict = true
 
 [tool.pytest.ini_options]
