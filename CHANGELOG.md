@@ -288,6 +288,39 @@ All notable changes to this project are documented here. The format follows
   describes what exists and states plainly what does not (A-24, A-25).
 - New settings: `ALERTING__*` and `SECRETS__FILE_PATH` (§21).
 
+### Fixed — found by running the software, not by reading it
+
+- **LIVE mode was unreachable.** `packages/snowflake_live` was complete and
+  tested, but every service compiled `Dialect.DUCKDB` and constructed a
+  `DuckDBEngine` directly, so a deployment configured for LIVE served
+  dashboards, chargeback, and agent answers from uploaded extracts without
+  saying so. Engine selection now happens in one module; `mode=live` with an
+  unusable connection refuses rather than falling back; and a test forbids any
+  other service from naming an engine.
+- **The LLM API-key path was broken in three places at once** — a settings
+  field that did not exist, a service that never passed a key, and an image
+  without the SDKs installed. The key is now held by reference and resolved
+  through the secrets adapter at the moment of use, and `build_provider` keeps
+  the promise in its own docstring that a missing key degrades rather than
+  fails.
+- **`/api/v1/chargeback/allocation` required explicit dates** while every metric
+  endpoint defaults them — the demo's own smoke test hit a 422. It now
+  allocates the landed window in OFFLINE and the last 30 complete days in LIVE,
+  and reports which it used.
+- **`Settings(mode=…)` silently discarded its argument.** Fields carrying a
+  validation alias could only be set by that alias, so code and tests
+  constructing settings by name were operating on defaults.
+- **`DATE_DIFF_DAYS` transposed its arguments in the Snowflake dialect**,
+  producing a day count from the wrong pair with nothing raised. A permanent
+  guard now fails any shim whose rendering changes meaning when re-parsed.
+- **Deterministic routing answered the wrong question three ways** — a word
+  appearing anywhere in a metric's identity counted as much as one naming its
+  subject. Matches are now weighted by where they land, and a breakdown metric
+  is not offered when the question asked for no breakdown.
+- **Two documents stated figures that had gone stale** — the parity snapshot
+  count and the worker alarm's description of what it protects. The first is
+  now asserted by a test.
+
 ### Deferred (recorded, not stubbed)
 
 - Everything deferred in earlier phases has landed. The remaining limitations
