@@ -151,3 +151,9 @@ jobs:
             The CycloneDX SBOM is attached, and build provenance is attested to
             this workflow run. See `docs/RUNBOOK.md` for the deploy and rollback
             procedure, and `CHANGELOG.md` for what changed.
+
+            **Deploying to AWS:** the Terraform VPC is zero-egress with ECR
+            interface endpoints, so a task cannot pull from this registry
+            directly. Mirror the digest into ECR first — `docs/RUNBOOK.md`
+            §"Routine deploy" has the `docker buildx imagetools create` command —
+            and pass the ECR reference as `image`.

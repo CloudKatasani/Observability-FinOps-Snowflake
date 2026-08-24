@@ -169,8 +169,22 @@ def _phrase_present(phrase: str, question: str) -> bool:
 
 
 def _identity_words(metric: Metric) -> set[str]:
-    """The words that name a metric: its id, its name, and its synonyms."""
+    """Every word that names a metric: its id, its name, and its synonyms."""
     return _words(" ".join([metric.id.replace(".", " "), metric.name, *metric.synonyms]))
+
+
+def _name_words(metric: Metric) -> set[str]:
+    """The words in a metric's *name* — the strongest statement of its subject.
+
+    Separated from the rest of its identity because where a word matches says
+    how much it means. "How many queries ran?" matched `q.volume` ("Query
+    volume"), `cost.attributed_credits` (whose synonym is "query-attributed
+    credits"), and `wh.zombie_credits` ("credits with no queries") all equally,
+    because every one of them contains the word somewhere. Only the first is
+    about queries; in the others the word is describing what the credits are
+    attributed to.
+    """
+    return _words(metric.name)
 
 
 def _token_weights(model: SemanticModel) -> dict[str, float]:
@@ -232,13 +246,19 @@ def _score(
         score += 10.0
 
     identity = _identity_words(metric)
+    named = _name_words(metric)
     described = _words(metric.description)
     weights = weights or {}
     for token in tokens:
         stemmed = _stem(token)
         weight = weights.get(stemmed, 1.0)
-        if stemmed in identity:
+        if stemmed in named:
             score += 2.0 * weight
+        elif stemmed in identity:
+            # In the id or a synonym: real evidence, but weaker than the name.
+            # This is what separates "Total credits" from "Cortex credits",
+            # whose id also happens to contain the word "total".
+            score += 1.4 * weight
         elif stemmed in described:
             score += 0.4 * weight
         elif matched_phrase and weight > _DISTINCTIVE_WORD:
@@ -258,13 +278,36 @@ def _score(
     # is a question about idle credits, and a larger bonus here answered it
     # with credits-by-warehouse instead. The slice itself is applied
     # separately, by `_dimensions`.
+    asked_for_a_breakdown = False
     for dimension, hints in _DIMENSION_HINTS.items():
         if any(hint in lowered for hint in hints) and dimension in metric.dimensions:
+            asked_for_a_breakdown = True
             score += 0.5
             if dimension in metric.id.lower():
                 score += 1.0
 
+    # A breakdown answers "how is it distributed", not "what is it". When the
+    # question asks for no distribution, one is the wrong shape of answer.
+    #
+    # This decides ties between metrics that share a common word but nothing
+    # else: "why did spend change week over week?" put `ai.credits_by_model`
+    # level with `cost.top5_concentration`, because "spend" appears in the
+    # identity of both, and id length then handed it to the AI breakdown — a
+    # question about the whole bill answered with a Cortex model split.
+    if not asked_for_a_breakdown and _is_a_breakdown(metric):
+        score -= 0.5
+
     return score
+
+
+#: Id fragments that mark a metric as a slice of a larger figure rather than
+#: the figure itself.
+_BREAKDOWN_MARKERS = ("by_", "_by_", "top5", "top_", "_mix", "per_")
+
+
+def _is_a_breakdown(metric: Metric) -> bool:
+    name = metric.id.lower().split(".", 1)[-1]
+    return any(marker in name for marker in _BREAKDOWN_MARKERS)
 
 
 def _dimensions(question: str, metric: Metric) -> list[str]:

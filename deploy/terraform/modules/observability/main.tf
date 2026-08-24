@@ -115,7 +115,7 @@ resource "aws_cloudwatch_metric_alarm" "app_cpu" {
 
 resource "aws_cloudwatch_metric_alarm" "worker_stopped" {
   alarm_name        = "${var.name}-worker-not-running"
-  alarm_description = "No worker task is running: refreshes, reconciliation, and the close will not happen. Runbook: docs/RUNBOOK.md#the-worker-is-not-running"
+  alarm_description = "No worker task is running: scheduled alert-rule evaluation will not happen, so a breaching condition goes unnoticed rather than unpaged. Runbook: docs/RUNBOOK.md#the-worker-is-not-running"
 
   namespace           = "AWS/ECS"
   metric_name         = "CPUUtilization"

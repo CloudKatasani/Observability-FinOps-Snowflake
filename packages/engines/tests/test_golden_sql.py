@@ -73,3 +73,26 @@ def test_snapshots_do_not_outlive_their_metrics() -> None:
     }
     orphans = [path.name for path in GOLDEN_DIR.glob("*.sql") if path.name not in known]
     assert not orphans, f"snapshots for metrics that no longer exist: {orphans}"
+
+
+def test_the_parity_document_states_the_real_snapshot_count() -> None:
+    """A document that quotes a number should be wrong loudly, not quietly.
+
+    `docs/PARITY_EXCEPTIONS.md` told readers the suite pinned 82 files for 41
+    metrics long after the catalogue had grown to 92. Nobody had reason to
+    doubt it, which is exactly what makes a stale figure in a document about
+    correctness worth a test.
+    """
+    import re
+
+    document = (
+        Path(__file__).parents[3] / "docs" / "PARITY_EXCEPTIONS.md"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"\((\d+) files: (\d+) metrics × 2 dialects\)", document)
+    assert match, "PARITY_EXCEPTIONS.md no longer states a snapshot count in the expected form"
+
+    files, metrics = int(match.group(1)), int(match.group(2))
+    assert metrics == len(ALL_METRIC_IDS), (
+        f"the document says {metrics} metrics; the catalogue has {len(ALL_METRIC_IDS)}"
+    )
+    assert files == metrics * len(list(Dialect))

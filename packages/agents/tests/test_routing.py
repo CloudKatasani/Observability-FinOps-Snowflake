@@ -37,6 +37,18 @@ def model() -> SemanticModel:
         ("Which warehouses are queueing?", "wh.queue_overload_pct"),
         ("How many queries spill?", "wh.spill_query_share"),
         ("How many tokens have we used?", "ai.total_tokens"),
+        # A generic question is about the bill, not about whichever domain
+        # happens to own the shortest metric id. "Total credits" and "Cortex
+        # credits" both contain the word "total" somewhere, and this one used
+        # to be answered with the Cortex figure.
+        ("How many credits did we consume in total?", "cost.total_credits"),
+        # The word appears in three metrics' identities, but only one of them
+        # is *named* for it — the others are describing what their credits are
+        # attributed to.
+        ("How many queries ran?", "q.volume"),
+        # Nothing here narrows the subject beyond "spend", so a Cortex model
+        # breakdown is the wrong shape of answer as well as the wrong subject.
+        ("Why did spend change week over week?", "cost.spend_usd"),
     ],
 )
 def test_ordinary_questions_reach_the_metric_that_answers_them(
@@ -159,3 +171,22 @@ def test_an_unstated_period_gets_a_default_that_is_named_in_the_answer() -> None
 
 def test_a_question_that_is_not_a_comparison_yields_no_windows() -> None:
     assert comparison_windows("What were our billed credits?", today=TODAY) is None
+
+
+def test_a_breakdown_does_not_answer_a_question_that_asked_for_no_breakdown(
+    model: SemanticModel,
+) -> None:
+    """"What is it" and "how is it distributed" are different questions.
+
+    A slice is only the right answer when the question asks how the figure
+    splits. Without that, a metric that splits by model, team, or warehouse is
+    answering something that was not asked.
+    """
+    plain = route("what did we spend", model)
+    assert plain is not None
+    assert "by_" not in plain.metric_id
+
+    sliced = route("what did we spend by team", model)
+    assert sliced is not None
+    assert sliced.metric_id == "cost.by_team_credits"
+    assert sliced.dimensions == ["team"]
