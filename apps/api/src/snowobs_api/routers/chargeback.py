@@ -72,10 +72,16 @@ class AllocationResponse(BaseModel):
 @router.get("/allocation", response_model=AllocationResponse)
 async def allocation(
     settings: SettingsDep,
-    start: date = Query(...),
-    end: date = Query(...),
+    start: date | None = Query(default=None),
+    end: date | None = Query(default=None),
 ) -> AllocationResponse:
-    """Fully allocated cost by team, with the reconciliation verdict."""
+    """Fully allocated cost by team, with the reconciliation verdict.
+
+    Omitting the dates allocates the whole landed window, matching the metric
+    endpoints. The response always echoes `period_start` and `period_end`, so a
+    default is reported rather than assumed — a caller never has to know the
+    data window before it can ask a question about it.
+    """
     return ChargebackService(settings).allocation_response(start, end)
 
 

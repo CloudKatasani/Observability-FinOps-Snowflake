@@ -55,6 +55,21 @@ class NotFoundError(AppError):
     problem_type = "https://snowobs.dev/problems/not-found"
 
 
+class DataUnavailableError(AppError):
+    """A source the answer needs has not been landed (R3).
+
+    Distinct from a dependency being down: the platform is healthy, the caller's
+    request is well-formed, and the data simply is not there yet. It carries a
+    422 rather than a 404 because the remedy is to supply the input, not to look
+    somewhere else — and it is raised in preference to returning an empty or
+    zero-valued answer, which would read as "your account cost nothing".
+    """
+
+    status_code = 422
+    title = "Required data has not been landed"
+    problem_type = "https://snowobs.dev/problems/data-unavailable"
+
+
 class DependencyUnavailableError(AppError):
     """A required backing service (database, cache, engine) is unreachable."""
 

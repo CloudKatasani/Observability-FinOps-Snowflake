@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from snowobs_common.config import Settings
+from snowobs_common.errors import DataUnavailableError
 from snowobs_finops.allocation import (
     UNATTRIBUTED,
     AllocationEngine,
@@ -201,10 +202,48 @@ class ChargebackService:
         return provisional, latency_floor, sources, disclosures
 
     # --------------------------------------------------------------- results
-    def allocate(self, start: date, end: date) -> tuple[AllocationResult, ReconciliationRun]:
+    def _landed_window(self, catalog: DuckDBCatalog) -> tuple[date, date] | None:
+        """The period the allocation inputs actually cover.
+
+        Used when a caller names no dates. Taken from the sources the waterfall
+        reads rather than from every landed source: a snapshot of `users` that
+        stretches further back than the metering history would widen the window
+        to a period there is no cost data for, and the reconciliation gate would
+        then compare a full allocation against a partly empty bill.
+        """
+        starts, ends = [], []
+        for source_id in REQUIRED_SOURCES:
+            stats = catalog.stats(source_id)
+            if stats is not None and stats.window is not None:
+                starts.append(stats.window[0])
+                ends.append(stats.window[1])
+        if not starts:
+            return None
+        # The overlap, not the union: a day only one input covers cannot be
+        # allocated and reconciled.
+        return max(starts), min(ends)
+
+    def allocate(
+        self, start: date | None, end: date | None
+    ) -> tuple[AllocationResult, ReconciliationRun, date, date]:
         catalog = self._catalog()
         self._compiled.clear()
         try:
+            if start is None or end is None:
+                landed = self._landed_window(catalog)
+                if landed is None:
+                    # R3: no inputs is not a zero-cost account, and the caller
+                    # gets told which sources are missing rather than an
+                    # allocation of nothing.
+                    raise DataUnavailableError(
+                        "Chargeback needs "
+                        f"{' and '.join(REQUIRED_SOURCES)} to be landed; neither is. "
+                        "Upload an extract, or check the coverage page for the "
+                        "remediation for each."
+                    )
+                start = start or landed[0]
+                end = end or landed[1]
+
             engine = AllocationEngine(registry=self._registry())
             allocation = engine.allocate(
                 self._warehouse_days(catalog, start, end),
@@ -218,7 +257,7 @@ class ChargebackService:
                 period_start=start,
                 period_end=end,
             )
-            return allocation, run
+            return allocation, run, start, end
         finally:
             catalog.close()
 
@@ -231,10 +270,12 @@ class ChargebackService:
         """
         return TeamRegistry()
 
-    def allocation_response(self, start: date, end: date) -> AllocationResponse:
+    def allocation_response(
+        self, start: date | None = None, end: date | None = None
+    ) -> AllocationResponse:
         from snowobs_api.routers.chargeback import AllocationResponse, TeamCost
 
-        allocation, run = self.allocate(start, end)
+        allocation, run, start, end = self.allocate(start, end)
         provisional, latency_floor, sources, disclosures = self._provenance()
         price = self.settings.finops.credit_price_usd
         totals = allocation.by_team()
@@ -286,7 +327,7 @@ class ChargebackService:
         )
 
     def reconciliation_response(self, start: date, end: date) -> ReconciliationResponse:
-        _, run = self.allocate(start, end)
+        _, run, _resolved_start, _resolved_end = self.allocate(start, end)
         return self._to_response(run)
 
     @staticmethod

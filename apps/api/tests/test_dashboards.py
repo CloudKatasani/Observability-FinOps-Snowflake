@@ -231,6 +231,56 @@ async def test_chargeback_response_carries_the_gate_verdict(settings: Settings) 
 
 
 @pytest.mark.asyncio
+async def test_allocation_without_dates_uses_the_landed_window(settings: Settings) -> None:
+    """A caller should not have to know the data window to ask about it.
+
+    The tile endpoints already default this way, and the inconsistency was not
+    theoretical: the demo's own smoke test called this endpoint the obvious way
+    and got a 422.
+    """
+    async with client_for(settings) as client:
+        response = await client.get("/api/v1/chargeback/allocation")
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    # The window is reported back, so a default is stated rather than assumed.
+    assert body["period_start"] and body["period_end"]
+    assert body["period_start"] <= body["period_end"]
+    assert body["teams"]
+
+    # And it agrees with what an explicit request for the same window returns.
+    async with client_for(settings) as client:
+        explicit = (
+            await client.get(
+                "/api/v1/chargeback/allocation"
+                f"?start={body['period_start']}&end={body['period_end']}"
+            )
+        ).json()
+    assert (
+        explicit["reconciliation"]["allocated_credits"]
+        == (body["reconciliation"]["allocated_credits"])
+    )
+
+
+@pytest.mark.asyncio
+async def test_allocation_with_no_landed_sources_explains_itself(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """R3: never answer "nothing was spent" when the truth is "nothing loaded"."""
+    empty: Path = tmp_path_factory.mktemp("lake-empty-chargeback")
+    settings = Settings(_env_file=None, storage={"provider": "local", "bucket": str(empty)})
+    async with client_for(settings) as client:
+        response = await client.get("/api/v1/chargeback/allocation")
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    detail = response.json()["detail"]
+    for source in ("warehouse_metering_history", "query_attribution_history"):
+        assert source in detail
+    assert "coverage" in detail.lower()
+
+
+@pytest.mark.asyncio
 async def test_chargeback_shows_its_own_sql_and_says_whether_it_is_settled(
     settings: Settings,
 ) -> None:

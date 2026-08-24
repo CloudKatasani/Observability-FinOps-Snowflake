@@ -38,6 +38,11 @@ x-snowobs-image: &snowobs-image
     GUARDRAILS__ALLOW_ADHOC_SQL: "false"
     FINOPS__MODE: showback
     FINOPS__RECONCILE_TOLERANCE_PCT: "0.5"
+    # An illustrative rate, so the demo shows the dollar figures a FinOps
+    # audience came to see. It is configuration, not a guess baked into the
+    # code: the app states the rate it applied next to every converted figure,
+    # and with this unset it shows credits only rather than inventing a price.
+    FINOPS__CREDIT_PRICE_USD: "3.00"
 
 services:
   postgres:

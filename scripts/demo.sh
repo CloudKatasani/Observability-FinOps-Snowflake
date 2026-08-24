@@ -72,7 +72,11 @@ if [[ "$NATIVE" -eq 1 ]]; then
   (cd "$ROOT/apps/web" && npm install --no-audit --no-fund && npm run build)
 
   echo "==> Starting the app on ${base_url}"
+  # FINOPS__CREDIT_PRICE_USD mirrors docker-compose.demo.yml: an illustrative
+  # rate so both demo paths show the same dollars. The app names the rate it
+  # used, and shows credits only when it is unset.
   (cd "$ROOT" && SNOWOBS_MODE=offline SNOWOBS_LOG_JSON=false \
+    FINOPS__CREDIT_PRICE_USD=3.00 \
     uv run uvicorn allinone.asgi:create_app --factory \
       --app-dir deploy/docker --host 127.0.0.1 --port "$PORT") &
   APP_PID=$!

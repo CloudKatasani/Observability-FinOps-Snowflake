@@ -140,22 +140,6 @@ class CompiledQuery:
     #: eight hours stale when it is final in forty-five minutes.
     gating_sources: list[str] = field(default_factory=list)
 
-    @property
-    def cache_key(self) -> str:
-        """Deprecated: use ``fingerprint`` and build the full key explicitly.
-
-        The SQL alone is not a safe cache key. Two tenants query
-        identically-named views and so compile byte-identical statements, and a
-        new upload changes the answer without changing the statement — so this
-        must be combined with a dataset version by
-        :func:`snowobs_engines.cache.cache_key`. It is kept only so an older
-        caller fails loudly at review rather than silently at runtime.
-        """
-        raise NotImplementedError(
-            "CompiledQuery.cache_key is not a safe cache key on its own. Use "
-            "snowobs_engines.cache.cache_key(sql_fingerprint=..., dataset_version=...)."
-        )
-
 
 def _quote(identifier: str) -> str:
     if not identifier.replace("_", "").isalnum():
