@@ -103,6 +103,8 @@ class MetricQueryResponse(BaseModel):
     scope_account: str | None
     scope_partial: bool
     contributing_accounts: list[str]
+    #: Accounts billing knows about that have landed nothing at account level.
+    missing_accounts: list[str] = Field(default_factory=list)
 
 
 class MetricTileResponse(BaseModel):
@@ -123,6 +125,7 @@ class MetricTileResponse(BaseModel):
     scope_account: str | None
     scope_partial: bool
     contributing_accounts: list[str]
+    missing_accounts: list[str] = Field(default_factory=list)
     allocation_method: str | None = None
     unavailable_reason: str | None = None
 
@@ -239,6 +242,7 @@ async def query_metrics(payload: MetricQueryRequest, settings: SettingsDep) -> M
         scope_account=series.scope_account,
         scope_partial=series.scope_partial,
         contributing_accounts=series.contributing_accounts,
+        missing_accounts=series.missing_accounts,
     )
 
 

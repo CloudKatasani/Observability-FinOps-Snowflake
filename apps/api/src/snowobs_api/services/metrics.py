@@ -18,9 +18,10 @@ from typing import Any
 from snowobs_api.services.engines import EngineChoice, open_engine, resolve_mode
 from snowobs_api.services.scope import Scope, ScopeRequest, ScopeVerdict, assess
 from snowobs_common.config import Settings
-from snowobs_common.errors import ScopeUnavailableError
+from snowobs_common.errors import AppError, ScopeUnavailableError
+from snowobs_common.logging import get_logger
 from snowobs_engines.cache import ResultCache
-from snowobs_semantics.compiler import MetricRequest, SemanticCompiler
+from snowobs_semantics.compiler import ACCOUNT_DIMENSION, MetricRequest, SemanticCompiler
 from snowobs_semantics.model import Metric, default_model
 from snowobs_semantics.registry import default_registry
 
@@ -52,6 +53,7 @@ class MetricValue:
     #: True when an organization figure covers only the accounts landed so far.
     scope_partial: bool = False
     contributing_accounts: list[str] = field(default_factory=list)
+    missing_accounts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -73,6 +75,10 @@ class MetricSeries:
     scope_account: str | None = None
     scope_partial: bool = False
     contributing_accounts: list[str] = field(default_factory=list)
+    missing_accounts: list[str] = field(default_factory=list)
+
+
+logger = get_logger(__name__)
 
 
 def _json_safe(value: Any) -> Any:
@@ -95,6 +101,9 @@ class MetricService:
         self.compiler = SemanticCompiler()
         self.model = default_model()
         self._cache = ResultCache()
+        #: Resolved once per request — see `landed_accounts`.
+        self._accounts_cache: list[str] | None = None
+        self._roster_cache: list[str] | None = None
 
     def _storage_root(self) -> Path:
         from snowobs_api.services.datasets import storage_root
@@ -122,6 +131,11 @@ class MetricService:
     def landed_accounts(self) -> list[str]:
         """Accounts present in this tenant's data, for the scope selector.
 
+        Memoised for the life of the service, which is one request. Without it
+        the scope endpoint re-opened the engine and re-registered the whole
+        catalog once per metric per scope — on the demo lake that is ~540 scans
+        and the picker sat on a skeleton for over three minutes.
+
         Only names that have landed *account-scoped* data count. The
         organization's own extracts are stamped too — `ORGANIZATION_USAGE` is
         exported once, from whichever account holds the grant — and that name
@@ -129,6 +143,9 @@ class MetricService:
         "ACME_GROUP" alongside its four accounts would invite a per-account
         view of something that has no per-account meaning.
         """
+        if self._accounts_cache is not None:
+            return list(self._accounts_cache)
+
         registry = default_registry()
         account_scoped = {source.id for source in registry if not source.is_organization_scoped}
         with self._engine() as chosen:
@@ -136,13 +153,71 @@ class MetricService:
             if catalog is None or not hasattr(catalog, "accounts"):
                 # LIVE reads one account per connection, so the accounts on
                 # offer are the ones configured rather than the ones discovered.
-                return [a.name for a in self.settings.snowflake.configured_accounts()]
+                self._accounts_cache = [
+                    a.name for a in self.settings.snowflake.configured_accounts()
+                ]
+                return list(self._accounts_cache)
 
             found: set[str] = set()
             for source_id in catalog.landed_sources():
                 if source_id in account_scoped:
                     found.update(catalog.accounts_for(source_id))
-            return sorted(found)
+            self._accounts_cache = sorted(found)
+            return list(self._accounts_cache)
+
+    def organization_roster(self) -> list[str]:
+        """Every account the organization contains, per `ORGANIZATION_USAGE`.
+
+        This is what makes a partial roll-up detectable. Billing names every
+        account whether or not its own detail was ever uploaded, so comparing
+        this against the accounts that landed says exactly which accounts an
+        organization-wide figure is missing — the gap that otherwise reads as a
+        quiet account.
+
+        Read through the governed layer rather than by querying the view
+        directly (§5), and empty when no organization export has landed: an
+        unknown roster is reported as unknown, never as complete.
+        """
+        if self._roster_cache is not None:
+            return list(self._roster_cache)
+
+        self._roster_cache = []
+        candidates = [
+            metric
+            for metric in self.model.metrics.values()
+            if ACCOUNT_DIMENSION in metric.dimensions
+            and all(
+                default_registry().get(source).is_organization_scoped
+                for source in metric.requires_sources
+            )
+        ]
+        if not candidates:
+            return []
+
+        metric = sorted(candidates, key=lambda m: m.id)[0]
+        request = MetricRequest(
+            metrics=[metric.id],
+            dimensions=[ACCOUNT_DIMENSION],
+            bucket_time=False,
+            limit=1000,
+        )
+        try:
+            with self._engine() as chosen:
+                result = chosen.engine.execute(self.compiler.compile(request, chosen.dialect))
+        except AppError as exc:
+            # No organization export landed, or it cannot be read. Either way
+            # the roster is unknown, which is not the same as empty.
+            logger.info("organization_roster_unavailable", detail=str(exc))
+            return []
+
+        column = ACCOUNT_DIMENSION.upper()
+        if column not in result.columns:
+            return []
+        index = result.columns.index(column)
+        self._roster_cache = sorted(
+            {str(row[index]) for row in result.rows if row[index] is not None}
+        )
+        return list(self._roster_cache)
 
     def scope_verdict(self, metric_id: str, scope: ScopeRequest) -> ScopeVerdict:
         """Can this metric answer at this scope? The reason travels with the no."""
@@ -153,6 +228,7 @@ class MetricService:
             registry=default_registry(),
             mode=resolve_mode(self.settings),
             landed_accounts=self.landed_accounts(),
+            organization_roster=self.organization_roster(),
         )
 
     def _scope_fields(
@@ -164,8 +240,9 @@ class MetricService:
         return {
             "scope": scope.scope.value,
             "scope_account": scope.account_filter,
-            "scope_partial": verdict.partial and len(contributing) > 1,
+            "scope_partial": verdict.partial,
             "contributing_accounts": contributing,
+            "missing_accounts": list(verdict.missing_accounts),
         }
 
     def query(self, request: MetricRequest, scope: ScopeRequest | None = None) -> MetricSeries:
@@ -184,6 +261,7 @@ class MetricService:
                 "; ".join(reason for _metric, verdict in refused if (reason := verdict.reason))
             )
         partial = any(v.partial for v in verdicts.values())
+        missing = sorted({a for v in verdicts.values() for a in v.missing_accounts})
 
         with self._engine() as chosen:
             compiled = self.compiler.compile(request, chosen.dialect)
@@ -200,7 +278,11 @@ class MetricService:
                 sql=result.executed_sql,
                 truncated=result.truncated,
                 row_count=result.row_count,
-                **self._scope_fields(scope, ScopeVerdict.ok(partial=partial), accounts),
+                **self._scope_fields(
+                    scope,
+                    ScopeVerdict.ok(partial=partial, missing_accounts=missing),
+                    accounts,
+                ),
             )
 
     def tile(

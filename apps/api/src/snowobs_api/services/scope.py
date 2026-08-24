@@ -27,7 +27,7 @@ mis-scoped figure.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from snowobs_semantics.compiler import ACCOUNT_DIMENSION
@@ -64,13 +64,20 @@ class ScopeVerdict:
 
     available: bool
     reason: str | None = None
-    #: True when the figure covers only part of the organization — an
-    #: organization roll-up over the accounts that happen to be landed.
+    #: True when the figure covers only part of the organization — and the
+    #: platform can say which part is missing.
     partial: bool = False
+    #: Accounts the organization is known to contain that have landed nothing
+    #: at account level. `ORGANIZATION_USAGE` names every account in the
+    #: organization, so an account billing knows about but whose detail has
+    #: never been uploaded is exactly the gap that reads as a quiet account.
+    missing_accounts: list[str] = field(default_factory=list)
 
     @classmethod
-    def ok(cls, *, partial: bool = False) -> ScopeVerdict:
-        return cls(available=True, partial=partial)
+    def ok(
+        cls, *, partial: bool = False, missing_accounts: list[str] | None = None
+    ) -> ScopeVerdict:
+        return cls(available=True, partial=partial, missing_accounts=missing_accounts or [])
 
     @classmethod
     def no(cls, reason: str) -> ScopeVerdict:
@@ -97,8 +104,15 @@ def assess(
     registry: SourceRegistry,
     mode: str,
     landed_accounts: list[str] | None = None,
+    organization_roster: list[str] | None = None,
 ) -> ScopeVerdict:
-    """Can this metric be answered at this scope, in this mode?"""
+    """Can this metric be answered at this scope, in this mode?
+
+    ``organization_roster`` is every account the organization contains, which
+    `ORGANIZATION_USAGE` knows even for accounts that have never uploaded their
+    own detail. Without it the platform cannot tell a complete roll-up from a
+    partial one, and says nothing rather than guessing.
+    """
     entity = model.entity(metric.entity)
     has_account = ACCOUNT_DIMENSION in entity.dimension_names
     organization_only = metric_is_organization_only(metric, registry)
@@ -135,9 +149,14 @@ def assess(
         )
 
     # OFFLINE: one lake, every landed account, computed over the union of rows.
-    # That is the organization's figure for the accounts present, which is only
-    # the whole organization if every account has been uploaded.
-    return ScopeVerdict.ok(partial=len(landed_accounts or []) > 0)
+    # That is the organization's figure for the accounts present, which is the
+    # whole organization only if every account has been uploaded.
+    #
+    # "Partial" means the platform can *name* an account it is missing, not
+    # merely that a roll-up happened. Flagging every roll-up made the warning
+    # permanent, and a warning that is always on is one nobody reads.
+    missing = sorted(set(organization_roster or []) - set(landed_accounts or []))
+    return ScopeVerdict.ok(partial=bool(missing), missing_accounts=missing)
 
 
 __all__ = [

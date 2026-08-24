@@ -184,6 +184,80 @@ async def test_account_scope_without_an_account_is_rejected(settings: Settings) 
     assert response.status_code == 422
 
 
+# ──────────────────────────────────────────── a roll-up that misses an account
+@pytest.fixture(scope="module")
+def incomplete_lake(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Settings]:
+    """Three accounts uploaded; the fourth is billed but never sent its detail.
+
+    The realistic enterprise state, and the one most easily misread: billing
+    knows about ACME_APAC, so it appears in every organization spend figure,
+    while its queries are simply absent — which looks exactly like a quiet
+    account unless the platform says otherwise.
+    """
+    lake: Path = tmp_path_factory.mktemp("partial-lake")
+    extract: Path = tmp_path_factory.mktemp("partial-extract")
+    organization = generate_organization(ORG)
+    layout = write_organization_csv(organization, extract)
+
+    pipeline = IngestPipeline(lake)
+    for account, directory in sorted(layout.account_dirs.items()):
+        if account == "ACME_APAC":
+            continue
+        pipeline.ingest_directory(directory, account=account)
+    pipeline.ingest_directory(layout.organization_dir, account=organization.organization_name)
+    yield Settings(_env_file=None, storage={"provider": "local", "bucket": str(lake)})
+
+
+def test_the_organization_roster_comes_from_billing_not_from_what_landed(
+    incomplete_lake: Settings,
+) -> None:
+    """`ORGANIZATION_USAGE` names every account, uploaded or not."""
+    service = MetricService(incomplete_lake)
+    assert "ACME_APAC" in service.organization_roster()
+    assert "ACME_APAC" not in service.landed_accounts()
+
+
+@pytest.mark.asyncio
+async def test_a_roll_up_missing_an_account_says_which_one(
+    incomplete_lake: Settings,
+) -> None:
+    async with client_for(incomplete_lake) as client:
+        tile = (await client.get("/api/v1/metrics/q.volume/tile")).json()
+
+    assert tile["scope_partial"] is True
+    assert tile["missing_accounts"] == ["ACME_APAC"]
+    assert "ACME_APAC" not in tile["contributing_accounts"]
+    assert Decimal(str(tile["value"])) > 0  # still an answer, just not the whole one
+
+
+@pytest.mark.asyncio
+async def test_an_organization_usage_figure_is_not_partial_when_detail_is_missing(
+    incomplete_lake: Settings,
+) -> None:
+    """The distinction that makes the flag worth reading.
+
+    Billing covers every account whether or not its `ACCOUNT_USAGE` was ever
+    uploaded, so an organization spend figure is complete even here. Flagging
+    it would train people to ignore the warning on the figures that are
+    genuinely incomplete.
+    """
+    async with client_for(incomplete_lake) as client:
+        tile = (await client.get("/api/v1/metrics/org.spend_currency/tile")).json()
+
+    assert tile["scope_partial"] is False
+    assert tile["missing_accounts"] == []
+    assert Decimal(str(tile["value"])) > 0
+
+
+@pytest.mark.asyncio
+async def test_a_complete_fleet_raises_no_partial_warning(settings: Settings) -> None:
+    """A warning that is always on is one nobody reads."""
+    async with client_for(settings) as client:
+        tile = (await client.get("/api/v1/metrics/q.volume/tile")).json()
+    assert tile["scope_partial"] is False
+    assert tile["missing_accounts"] == []
+
+
 # ───────────────────────────────────────────────── what a scope cannot answer
 def test_an_account_usage_metric_has_no_single_query_organization_total_in_live() -> None:
     """LIVE returns one account per connection, and averaging a rate across
