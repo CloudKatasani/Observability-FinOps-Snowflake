@@ -1,0 +1,153 @@
+name: release
+
+# Cutting a release publishes the all-in-one image and the evidence that goes
+# with it: the SBOM, the vulnerability scan, and a provenance attestation. A
+# tag is only a release once those exist — a customer's security review asks
+# for them, and reconstructing them after the fact proves nothing about the
+# artefact that actually shipped.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version to build, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository }}
+
+jobs:
+  # The release runs the full merge gate again rather than trusting that the
+  # commit was green when it merged: a tag can point at any commit, including
+  # one that never went through a pull request.
+  verify:
+    name: verify (lint, types, tests, parity, evals)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --all-packages --dev --frozen
+
+      - name: Lint and typecheck
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy packages apps fixtures
+
+      - name: Unit tests
+        run: uv run pytest -m "not snowflake"
+
+      - name: Dual-engine parity (R1)
+        run: make test-parity
+
+      - name: Seed the fixture dataset
+        run: uv run python scripts/demo_seed.py --root .data --end-date 2026-08-24 --force
+
+      - name: Agent evals (§12.6)
+        run: make eval
+
+      - name: The version in pyproject.toml matches the tag
+        # A release labelled v0.2.0 that reports 0.1.0 from /api/v1/meta is the
+        # kind of mismatch nobody notices until they are debugging production.
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          declared="$(uv run python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [ "v${declared}" != "${tag}" ]; then
+            echo "::error::tag ${tag} does not match pyproject version ${declared}"
+            exit 1
+          fi
+
+  publish:
+    name: publish (image, SBOM, attestation)
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ github.event.inputs.tag || github.ref_name }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.allinone
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Ties the published digest to the workflow run that produced it, so a
+      # consumer can verify the image came from this repository at this commit.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Scan the published image (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx
+          output: sbom.cyclonedx.json
+          scan-type: image
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: sbom.cyclonedx.json
+          body: |
+            Image: `${{ env.REGISTRY }}/${{ env.IMAGE }}@${{ steps.build.outputs.digest }}`
+
+            The CycloneDX SBOM is attached, and build provenance is attested to
+            this workflow run. See `docs/RUNBOOK.md` for the deploy and rollback
+            procedure, and `CHANGELOG.md` for what changed.

@@ -19,49 +19,76 @@ Two operating modes, one set of numbers:
 Both modes compile from the same declarative semantic layer and must produce
 identical numbers for identical inputs — enforced by a dual-engine parity suite.
 
-> **Project status: Phase 0 (foundations).** The build follows the phased plan in
-> [`docs/BUILD_PROMPT.md`](docs/BUILD_PROMPT.md) §24 — currently: repo scaffold,
-> settings, logging, health endpoints, compose stack, CI. Dashboards, ingestion,
-> the semantic compiler, agents, and deployment artifacts land in Phases 1–8.
+## The demo
+
+The fastest way to see the whole platform is on synthetic data — no Snowflake
+account, no cloud credentials, and no LLM key:
+
+```bash
+git clone <repo> && cd <repo>
+make demo                        # http://localhost:8080
+```
+
+That generates a synthetic Snowflake account, ingests it through the real
+OFFLINE path, and serves the app from a single container. With no LLM key the
+agent still answers: questions route to governed metrics deterministically, and
+it says plainly that it will not narrate the result. `make doctor` checks ports
+and Docker resources first; `make demo-down` removes the stack and its volumes.
+
+[`docs/DEMO.md`](docs/DEMO.md) is the guided walkthrough, including the
+phenomena planted in the fixture data and where each one surfaces.
 
 ## Getting started (development)
 
 Prerequisites: Docker (with Compose), [`uv`](https://docs.astral.sh/uv/), Node 22.
 
 ```bash
-git clone <repo> && cd <repo>
 cp .env.example .env
 uv sync --all-packages --dev     # Python workspace
 (cd apps/web && npm install)     # SPA
 make dev                         # postgres/redis/minio containers + API + worker + web
 ```
 
-- Web: http://localhost:5173 (status page at `/status`)
+- Web: http://localhost:5173
 - API: http://localhost:8000 — `/healthz`, `/readyz`, `/api/v1/meta`, OpenAPI at `/docs`
-
-Full container stack instead: `docker compose -f deploy/compose/docker-compose.yml up -d --build`
-(web at http://localhost:8080).
 
 ## Development commands
 
 ```bash
-make test        # pytest + vitest
-make lint        # ruff + eslint
-make typecheck   # mypy (strict on packages/) + tsc
-make fmt         # auto-format Python
-make build       # build container images
+make test          # pytest + vitest
+make test-parity   # dual-engine parity + golden SQL snapshots (gates merges, R1)
+make eval          # agent golden-question suite (§12.6 gates)
+make lint          # ruff + eslint
+make typecheck     # mypy (strict on packages/) + tsc
+make fmt           # auto-format Python
+make seed          # ingest a synthetic dataset into the local OFFLINE lake
+make catalog       # regenerate docs/KPI_CATALOG.md from the metric YAML
+make contracts     # regenerate docs/DATA_CONTRACTS.md from the data product YAML
+make provisioning  # regenerate the Snowflake grant SQL from the source registry
+make build         # build container images
 ```
+
+`make help` lists every target.
 
 ## Repository map
 
 - `CLAUDE.md` — non-negotiable principles, stack, Definition of Done. Read first.
 - `docs/BUILD_PROMPT.md` — the full product specification and phased plan.
+- `docs/ARCHITECTURE.md` — the system as built, and where each principle is enforced.
+- `docs/SECURITY.md` — threat model, the Snowflake privilege design, the SQL guard.
+- `docs/RUNBOOK.md` — deploy, rollback, and a procedure for every alert.
+- `docs/USER_GUIDE.md` — for the FinOps analyst who will use this daily.
+- `docs/DEMO.md` — the guided walkthrough of the synthetic account.
+- `docs/KPI_CATALOG.md` — every KPI, its sources, and its freshness floor (generated).
+- `docs/DATA_CONTRACTS.md` — the published data products and their contracts (generated).
 - `docs/ASSUMPTIONS.md` — verified Snowflake/DuckDB/LLM facts with revisit triggers.
+- `docs/PARITY_EXCEPTIONS.md` — every metric whose two engines are not bit-identical, and why.
 - `docs/adr/` — architecture decision records.
 - `apps/` — `api` (FastAPI), `worker` (arq), `web` (React + Vite).
-- `packages/` — shared Python libraries; `packages/semantics/` will hold the single
-  source of truth for all metrics.
-- `deploy/` — Dockerfiles, Compose; Terraform arrives in Phase 8.
+- `packages/` — the shared libraries. `packages/semantics/` is the single source of
+  truth for every metric; everything else compiles, guards, executes, or explains it.
+- `deploy/` — Dockerfiles, Compose, and the Terraform for a private AWS deployment.
+- `snowflake/` — the provisioning SQL, generated from the source registry.
 - `config/branding.yaml` — white-label display name and palette.
 
 ## License

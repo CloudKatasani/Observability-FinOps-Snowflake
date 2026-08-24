@@ -98,6 +98,84 @@ All notable changes to this project are documented here. The format follows
 - **Generated `docs/KPI_CATALOG.md`** (`make catalog`) — from the YAML, never by
   hand.
 
+### Added — Phase 3 (Allocation, chargeback, and the reconciliation gate)
+
+- **Allocation waterfall** (`packages/finops/allocation.py`): query-tag → role →
+  user → warehouse-default → unattributed, with cost split into its three real
+  components — direct attributed compute, a share of the warehouse's idle time,
+  and a share of the account's billed cloud services. Apportionment uses the
+  largest-remainder method so the parts sum to the whole exactly, with no
+  rounding residue left in an "other" bucket.
+- **Reconciliation gate** (`packages/finops/reconciliation.py`): allocated
+  credits are compared daily against `METERING_DAILY_HISTORY` within a 0.5%
+  tolerance, and chargeback figures are withheld entirely when it fails (R6).
+  A red gate produces a banner and an empty team table, never a quietly wrong
+  one.
+- **Chargeback API** (`/api/v1/chargeback/allocation`, `/reconciliation/{date}`)
+  carrying the gate's verdict, the unattributed share, and the SQL behind every
+  constituent query.
+- **Dashboards** (`apps/web`): executive cost, platform health, team chargeback,
+  and coverage. Money is handled as fixed-point decimal strings in the browser
+  too — `lib/decimal.ts` does BigInt arithmetic rather than `parseFloat` (§27.7).
+  Every tile, chart, and table closes with a provenance strip: as-of timestamp,
+  freshness floor, sources, and a "show the SQL" disclosure (R5).
+
+### Added — Phase 4 (LIVE mode)
+
+- **Key-pair connection** (`packages/snowflake_live/connection.py`) with the
+  private key read from the secrets adapter, never from the database or a log.
+- **Grants probe** (`grant_probe.py`): reports exactly which of the granular
+  `SNOWFLAKE` database roles are missing and emits the remediation SQL to fix
+  each one — never blanket `IMPORTED PRIVILEGES` (R4).
+- **Provisioning SQL** generated from the source registry, so the grants an
+  operator runs cannot drift from the views the application actually reads.
+- **Pushdown engine** (`engine.py`): the same compiled semantic SQL, executed in
+  Snowflake with a pinned warehouse, a statement timeout, and the same SQL guard
+  the OFFLINE path uses.
+
+### Added — Phase 5 (Domains D4–D9, forecasting, anomaly detection, levers)
+
+- **92 KPIs across nine domains** — storage, pipelines, data quality, security,
+  AI/Cortex, and chargeback join cost, warehouse, and query. Nine new entities.
+  Every metric executes in both dialects and matches exactly; no new parity
+  tolerances were needed.
+- **Forecasting** (`packages/analytics/forecast.py`): explicit trend and
+  weekly-seasonality decomposition with Theil–Sen robust regression — no
+  black-box dependency, and the method is stated next to the number.
+- **Anomaly detection** (`anomaly.py`): MAD-based robust z-scores, plus
+  `explain_delta`, a greedy contribution decomposition that attributes a change
+  to the members of a dimension deterministically.
+- **Optimisation levers** (`levers.py`, `savings.py`): right-sizing,
+  auto-suspend, and idle-reduction recommendations, each with a dollar impact
+  and the assumption behind it.
+- **Alerting** (`alerting.py`): rules with severity, suppression, and a runbook
+  link — a rule without one does not ship.
+
+### Added — Phase 6 (The agentic layer)
+
+- **In-house tool-use runtime** (`packages/agents/runtime/supervisor.py`): a
+  thin, auditable loop — no framework, so every tool call is inspectable in the
+  trace (§27.12). Seven specialists, each given only the tools its role needs.
+- **Text-to-metric, not text-to-SQL**: agents choose governed metrics; the SQL
+  is compiled by the semantic layer and passes the guard like everything else.
+- **Grounding enforcement (R12)**: an answer containing a figure no tool
+  returned is withheld, not shown with a caveat. The discarded draft is kept on
+  the trace for review, and the refusal does not repeat the invented number back
+  to the reader.
+- **Injection defence (§12.5)**: tool output re-enters the model fenced as data,
+  instruction-shaped text is neutralised, and the fence cannot be closed from
+  inside it. Five adversarial fixtures in the golden set prove it.
+- **Deterministic mode (§19)**: with no LLM key the platform still answers —
+  questions route to governed metrics, coverage, and the catalogue by keyword
+  and synonym matching, and causal questions get a real contribution
+  decomposition over windows derived from the question's own words. It says
+  plainly that narration is disabled rather than pretending to be unavailable.
+- **Eval harness** (`packages/agents/evals/`): 76 golden questions across nine
+  domains and nine categories. `make eval` gates on tool selection ≥ 90%,
+  numeric correctness 100%, **zero** fabricated figures, and **zero** injections
+  obeyed. Categories the deterministic path cannot be held to are reported as
+  unassertable rather than scored as passes.
+
 ### Added — Phase 7 (Data product management)
 
 - **Data product registry** (`packages/dataproducts/products/`): four seed
@@ -147,8 +225,31 @@ All notable changes to this project are documented here. The format follows
   and `CREATE AGENT` syntax recorded in `docs/ASSUMPTIONS.md` §6a, closing most
   of U-4; new assumptions A-18 to A-23.
 
+### Added — Phase 8 (Deployment, hardening, documentation)
+
+- **`make demo`**: `git clone` to a populated application in one command, with
+  no Snowflake account, no cloud credentials, and no LLM key. An all-in-one
+  image serves the API, worker, and SPA on one port over a synthetic account
+  ingested through the real OFFLINE path.
+- **Terraform** (`deploy/terraform/`): network, security, data, platform,
+  compute, edge, observability, and CI modules for a private AWS deployment,
+  wired up for dev and prod. Rollback is documented and tested.
+- **`scripts/doctor.py`** (`make doctor`): pre-flight check of ports, Docker
+  resources, and configuration before a first run.
+- **`security.yml`**: scheduled dependency, secret-history, CodeQL, and image
+  scanning — for the CVE published after the code merged, which the per-commit
+  gate cannot catch.
+- **`release.yml`**: re-runs the full merge gate against the tagged commit,
+  publishes a multi-architecture image with build provenance attested, and
+  attaches the CycloneDX SBOM to the release.
+- **Documentation set**: `ARCHITECTURE.md`, `SECURITY.md`, `RUNBOOK.md`,
+  `DEMO.md`, `AWS_COST.md`, and a `USER_GUIDE.md` written for the FinOps analyst
+  rather than the engineer.
+
 ### Deferred (recorded, not stubbed)
 
-- `Dockerfile.allinone`, `docker-compose.demo.yml`, `make demo`, Terraform,
-  release/security workflows — arrive with their owning phases (see
-  `docs/BUILD_PROMPT.md` §24 and `docs/ASSUMPTIONS.md` A-14).
+- Everything deferred in earlier phases has landed. The remaining limitations
+  are recorded as numbered assumptions in `docs/ASSUMPTIONS.md`, each with its
+  rationale and the trigger that should prompt a revisit — notably the sources
+  the fixture generator does not land (`remaining_balance_daily`, `TABLES`),
+  which make two metrics read a documented proxy rather than the ideal column.
