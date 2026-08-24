@@ -67,6 +67,11 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://snowobs:snowobs@postgres:5432/snowobs
       REDIS_URL: redis://redis:6379/0
+      # This stack starts both, so it checks both: a Postgres that failed to
+      # come up should be visible on /status here rather than discovered later.
+      # The demo run from a checkout starts neither and requires neither.
+      READINESS__REQUIRE_POSTGRES: "true"
+      READINESS__REQUIRE_REDIS: "true"
       STORAGE__PROVIDER: minio
       STORAGE__BUCKET: snowobs
       STORAGE__ENDPOINT_URL: http://minio:9000

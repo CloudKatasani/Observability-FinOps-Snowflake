@@ -463,6 +463,29 @@ All notable changes to this project are documented here. The format follows
   and "which account spends the most?" slices by account instead of returning
   the fleet's total under a question that named no account.
 
+### Fixed — the status page reported failures that were not failures
+
+- **`/readyz` demanded Postgres and Redis that nothing uses.** The API's only
+  consumer of either store was the readiness check itself — the query cache is
+  in-process, no code reads the metadata database (A-16, A-18), and Redis is
+  the worker's queue, which the all-in-one image does not run. So `make
+  demo-native`, which starts no containers, showed two red crosses on the
+  System status page and returned 503 from the endpoint a load balancer
+  believes, for a deployment that served every page correctly.
+
+  Which components are required is now configuration
+  (`READINESS__REQUIRE_POSTGRES` / `READINESS__REQUIRE_REDIS`, both default
+  `false`, both `true` in the dev compose stack and the AWS deployment, A-36).
+  A component that is not required reports a third state — `not_required`,
+  with the reason and the flag that would re-enable it — and is not probed:
+  a cross claims a failure that has not happened, and a tick claims a check
+  that never ran. Readiness gates per component, so a deployment that needs
+  Redis and not Postgres fails on the one it depends on.
+- **Readiness could echo a connection string to an unauthenticated endpoint.**
+  A component's `detail` was already the exception type rather than its
+  message, which is what keeps the host, port, and user name out of an open
+  endpoint. That is now asserted rather than incidental.
+
 ### Deferred (recorded, not stubbed)
 
 - Everything deferred in earlier phases has landed. The remaining limitations

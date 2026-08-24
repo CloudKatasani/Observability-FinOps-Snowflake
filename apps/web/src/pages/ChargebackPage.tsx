@@ -7,12 +7,7 @@ import ProvenanceBar from "@/components/Provenance";
 import ReconciliationBanner from "@/components/ReconciliationBanner";
 import { ErrorState, LoadingRegion } from "@/components/states";
 import type { SqlDisclosure, TeamCost } from "@/api/client";
-import {
-  useAllocation,
-  useMeta,
-  useSourceIndex,
-  useSources,
-} from "@/hooks/useApi";
+import { useAllocation, useMeta, useSourceIndex, useSources } from "@/hooks/useApi";
 import { useDateRange } from "@/hooks/useDateRange";
 import { useScope } from "@/hooks/useScope";
 import { parseDecimal, toPlotNumber } from "@/lib/decimal";
@@ -29,9 +24,7 @@ function allocationSql(disclosures: readonly SqlDisclosure[]): string {
   return disclosures
     .map((disclosure) => {
       const sliced =
-        disclosure.dimensions.length > 0
-          ? ` by ${disclosure.dimensions.join(", ")}`
-          : "";
+        disclosure.dimensions.length > 0 ? ` by ${disclosure.dimensions.join(", ")}` : "";
       return [
         `-- ${disclosure.purpose}`,
         `-- ${disclosure.metrics.join(", ")}${sliced}`,
@@ -81,10 +74,7 @@ export default function ChargebackPage() {
     >
       {allocation.isPending ? (
         <Panel title="Reconciliation gate">
-          <LoadingRegion
-            label="Running the allocation and its reconciliation"
-            lines={4}
-          />
+          <LoadingRegion label="Running the allocation and its reconciliation" lines={4} />
         </Panel>
       ) : allocation.isError ? (
         <ErrorState
@@ -96,16 +86,13 @@ export default function ChargebackPage() {
       ) : !data ? (
         <Panel title="Reconciliation gate">
           <p className="rounded border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-700">
-            The allocation endpoint returned no body, so neither the gate's
-            verdict nor any team figure can be shown.
+            The allocation endpoint returned no body, so neither the gate's verdict nor any team
+            figure can be shown.
           </p>
         </Panel>
       ) : (
         <>
-          <ReconciliationBanner
-            reconciliation={data.reconciliation}
-            published={published}
-          />
+          <ReconciliationBanner reconciliation={data.reconciliation} published={published} />
 
           <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
             <Panel
@@ -134,24 +121,19 @@ export default function ChargebackPage() {
                     team: <span className="font-medium">{team.team}</span>,
                     direct: formatCredits(team.direct_credits, 1) ?? "unknown",
                     idle: formatCredits(team.idle_credits, 1) ?? "unknown",
-                    cloud:
-                      formatCredits(team.cloud_services_credits, 1) ??
-                      "unknown",
+                    cloud: formatCredits(team.cloud_services_credits, 1) ?? "unknown",
                     total: formatCredits(team.total_credits, 1) ?? "unknown",
                     cost:
                       formatFigure(team.cost_usd, "currency", 2, "USD") ??
                       "no credit price configured",
-                    share:
-                      formatFigure(team.share_of_total, "percent", 1) ??
-                      "unknown",
+                    share: formatFigure(team.share_of_total, "percent", 1) ?? "unknown",
                   }))}
                 />
               ) : (
                 <p className="rounded border border-dashed border-red-300 bg-red-50 p-4 text-sm text-red-950">
-                  No team figures are shown. The reconciliation gate above did
-                  not pass, and R6 forbids publishing allocated cost that does
-                  not reconcile to the metered bill. Resolve the variance and
-                  re-run the allocation.
+                  No team figures are shown. The reconciliation gate above did not pass, and R6
+                  forbids publishing allocated cost that does not reconcile to the metered bill.
+                  Resolve the variance and re-run the allocation.
                 </p>
               )}
               <ProvenanceBar
@@ -169,20 +151,14 @@ export default function ChargebackPage() {
               >
                 <p className="flex items-baseline gap-1.5">
                   <span className="text-2xl leading-none font-semibold tabular-nums text-slate-900">
-                    {formatFigure(data.unattributed_share, "percent", 1) ??
-                      "unknown"}
+                    {formatFigure(data.unattributed_share, "percent", 1) ?? "unknown"}
                   </span>
                 </p>
                 <p className="mt-2 text-xs text-slate-600">
                   Credit price:{" "}
                   <span className="tabular-nums">
                     {data.credit_price_usd
-                      ? (formatFigure(
-                          data.credit_price_usd,
-                          "currency",
-                          4,
-                          "USD",
-                        ) ?? "unknown")
+                      ? (formatFigure(data.credit_price_usd, "currency", 4, "USD") ?? "unknown")
                       : "not configured — costs are shown in credits only"}
                   </span>
                 </p>
@@ -207,19 +183,13 @@ export default function ChargebackPage() {
                       categories: chartTeams.map((team) => team.team),
                       series: COMPONENTS.map((component) => ({
                         name: component.label,
-                        values: chartTeams.map((team) =>
-                          plot(component.pick(team)),
-                        ),
+                        values: chartTeams.map((team) => plot(component.pick(team))),
                       })),
                       valueLabel: (seriesName, index) => {
                         const team = chartTeams[index];
-                        const component = COMPONENTS.find(
-                          (entry) => entry.label === seriesName,
-                        );
+                        const component = COMPONENTS.find((entry) => entry.label === seriesName);
                         if (!team || !component) return "unknown";
-                        return (
-                          formatCredits(component.pick(team), 1) ?? "unknown"
-                        );
+                        return formatCredits(component.pick(team), 1) ?? "unknown";
                       },
                     })}
                   />

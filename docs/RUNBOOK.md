@@ -59,7 +59,34 @@ are), [`SECURITY.md`](SECURITY.md) (controls and limitations),
 | Endpoint | Answers | Touches | Codes |
 |---|---|---|---|
 | `GET /healthz` | Is the process up? | Nothing | Always `200` with version |
-| `GET /readyz` | Can this instance serve traffic? | Postgres (`SELECT 1`) and Redis (`PING`), each with a 2-second timeout, run concurrently | `200` when both are `ok`; `503` with a per-component breakdown otherwise |
+| `GET /readyz` | Can this instance serve traffic? | Each **required** backing service — Postgres (`SELECT 1`), Redis (`PING`) — with a 2-second timeout, run concurrently | `200` when every required component is `ok`; `503` with a per-component breakdown otherwise |
+
+### Which components are required
+
+Readiness describes *this* deployment, not the topology the compose file draws.
+`READINESS__REQUIRE_POSTGRES` and `READINESS__REQUIRE_REDIS` say whether the
+instance needs each store to serve traffic; a component that is not required is
+reported as `not_required` with the reason and is **not probed**.
+
+| Deployment | Postgres | Redis | Why |
+|---|---|---|---|
+| `make demo-native` | not required | not required | Starts no containers, and needs none |
+| `make demo` (compose) | not required | not required | Starts both to mirror production, but no code path reads either — and both demo paths should show the same page |
+| `deploy/compose` (dev stack) | **required** | **required** | Provides both, so a store that failed to start is visible on `/status` |
+| AWS (Terraform) | **required** | **required** | RDS and ElastiCache are provisioned and paid for on purpose |
+
+Both default to *not required* because today the API's only consumer of either
+store is the readiness check itself: the query cache is in-process, no code
+reads the metadata database (A-16, A-18), and Redis is the worker's queue.
+Requiring them by default reported a demo as `not_ready` — two red crosses and
+a 503 — for services that deployment does not use.
+
+**This flips when the first Alembic migration lands.** At that point application
+code reads Postgres, `require_postgres` becomes `true` for every deployment, and
+the ALB starts taking a task out of rotation when its database is unreachable —
+which it does not do today. Until then, an AWS deployment is the one that gates
+on both, so a misconfigured store is caught the day it is deployed rather than
+the day something first reads it.
 
 The split is deliberate. The container's own `HEALTHCHECK` and the ECS container
 health check use `/healthz`, so a task whose database is briefly unreachable is not
@@ -69,7 +96,12 @@ service's health-check grace period is 90 (`health_check_grace_period_seconds`),
 which covers loading the SPA bundle and the semantic model at import time.
 
 The SPA's **System status** page (`/status`) renders both, naming each unavailable
-component and its error type.
+component and its error type, and showing a component this deployment does not
+require in grey with the reason rather than as a failure.
+
+`/readyz` is unauthenticated, so a component's `detail` is the exception *type*
+and never its message: a driver's connection error carries the host, the port,
+and often the user name it failed to authenticate with.
 
 Logs are structured JSON (`SNOWOBS_LOG_JSON=true` in every deployed environment)
 and carry a `trace_id` bound per request. The same id is echoed in the

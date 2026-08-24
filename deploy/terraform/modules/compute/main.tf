@@ -22,6 +22,14 @@ locals {
       SNOWOBS_TENANCY                 = var.tenancy
       SNOWOBS_LOG_JSON                = "true"
       REDIS_URL                       = var.redis_url
+      # An AWS deployment provisions RDS and ElastiCache on purpose and pays
+      # for both, so it gates readiness on them: a misconfigured store is
+      # reported the day it is deployed rather than the day something first
+      # reads it. The demo defaults the other way — it provides neither and
+      # needs neither, and a red cross for an absent service nobody uses is a
+      # false alarm. See ReadinessSettings.
+      READINESS__REQUIRE_POSTGRES     = "true"
+      READINESS__REQUIRE_REDIS        = "true"
       STORAGE__PROVIDER               = "s3"
       STORAGE__BUCKET                 = var.data_lake_bucket
       STORAGE__REGION                 = var.region

@@ -39,6 +39,31 @@ class SecretsSettings(BaseModel):
     file_path: str = "/run/secrets/snowobs.json"
 
 
+class ReadinessSettings(BaseModel):
+    """Which backing services this deployment needs in order to serve traffic.
+
+    Readiness has to describe *this* deployment, not the topology the compose
+    file happens to draw. The API's only consumer of Postgres and Redis today is
+    the readiness check itself: the query cache is in-process
+    (`snowobs_engines.cache.ResultCache`), no application code reads or writes
+    the metadata database (A-16, A-18), and Redis is the arq worker's queue —
+    a separate process that the all-in-one image does not run. So a deployment
+    that provides neither is fully functional, and reporting it as `not_ready`
+    told a user something was broken when nothing they could use was.
+
+    Both therefore default to *not required*. That is a statement about what is
+    wired today, not a permanent one: when the first Alembic migration lands and
+    application code reads Postgres, this flips to `true` here and in the
+    deployments that provide it, and the readiness check starts gating on it
+    again. A component that is not required is reported as such and is not
+    probed — probing a dependency a deployment does not have is how a status
+    page acquires a red cross that everyone learns to explain away.
+    """
+
+    require_postgres: bool = False
+    require_redis: bool = False
+
+
 class AuthSettings(BaseModel):
     """Authentication provider. ``local`` is a development fallback only."""
 
@@ -251,6 +276,7 @@ class Settings(BaseSettings):
     )
 
     storage: StorageSettings = StorageSettings()
+    readiness: ReadinessSettings = ReadinessSettings()
     secrets: SecretsSettings = SecretsSettings()
     auth: AuthSettings = AuthSettings()
     llm: LLMSettings = LLMSettings()

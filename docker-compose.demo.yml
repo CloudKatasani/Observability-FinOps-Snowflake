@@ -25,6 +25,12 @@ x-snowobs-image: &snowobs-image
     # Postgres holds app metadata only; telemetry never lands here (R2).
     DATABASE_URL: postgresql+asyncpg://snowobs:snowobs@postgres:5432/snowobs
     REDIS_URL: redis://redis:6379/0
+    # READINESS__REQUIRE_* is deliberately left at its default (false), unlike
+    # the dev stack and the AWS deployment. This compose file starts both
+    # services to mirror the production topology, but no code path in the demo
+    # reads either, and `make demo` and `make demo-native` should show the same
+    # status page — the second starts no containers at all. A demo whose health
+    # depends on a service it never uses fails for a reason nobody can act on.
     # OFFLINE lake on the container filesystem. Named explicitly rather than
     # left to the default so the seeder and the app cannot disagree about it.
     STORAGE__PROVIDER: local

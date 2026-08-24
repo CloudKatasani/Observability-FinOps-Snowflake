@@ -285,6 +285,12 @@ the tool that preaches observability is itself observable, and that liveness and
 readiness are deliberately different questions —
 [`RUNBOOK.md`](RUNBOOK.md#health-and-readiness) explains why.
 
+Postgres and Redis read **not required** here, in grey rather than red, each
+naming why: no code path in the demo reads either, so neither is probed. That
+is a third state on purpose. A cross would report a failure that has not
+happened; a tick would claim a check that never ran. It is the same rule R3
+applies to a missing source, turned on the platform itself.
+
 ---
 
 ## The planted phenomena
