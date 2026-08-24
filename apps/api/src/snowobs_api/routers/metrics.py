@@ -75,6 +75,10 @@ class MetricQueryResponse(BaseModel):
     latency_floor_minutes: int
     provisional: bool
     sources: list[str]
+    #: R7: the sources that gate completeness, which can be narrower than
+    #: `sources` when an entity view joins a slow column this query never
+    #: selects. A client should judge freshness from these, not from `sources`.
+    gating_sources: list[str]
     sql: str
 
 
@@ -90,6 +94,7 @@ class MetricTileResponse(BaseModel):
     latency_floor_minutes: int
     provisional: bool
     sources: list[str]
+    gating_sources: list[str]
     sql: str
     allocation_method: str | None = None
     unavailable_reason: str | None = None
@@ -140,6 +145,7 @@ async def query_metrics(payload: MetricQueryRequest, settings: SettingsDep) -> M
         latency_floor_minutes=series.latency_floor_minutes,
         provisional=series.provisional,
         sources=series.sources,
+        gating_sources=series.gating_sources,
         sql=series.sql,
     )
 

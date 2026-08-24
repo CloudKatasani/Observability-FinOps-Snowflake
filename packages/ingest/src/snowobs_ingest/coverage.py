@@ -7,7 +7,7 @@ KPI: enabled, degraded, or unavailable — and which missing source blocks it.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
@@ -99,6 +99,16 @@ def _remediation_for(source: SourceDefinition, status: SourceStatus, mode: str) 
         return (
             f"{source.snowflake_object} was uploaded but contained no usable rows. "
             "Re-export with a wider time window, or check the extract's WHERE clause."
+        )
+    if status is SourceStatus.STALE:
+        # A stale source landed once and then aged out, so telling its owner to
+        # "upload an extract" reads as though nothing was ever provided and
+        # sends them looking for a problem that is not there.
+        return (
+            f"{source.snowflake_object} landed but its newest row is older than "
+            f"{source.documented_latency_minutes} minutes of documented latency allows. "
+            f"Re-export it and upload '{source.id}.csv' or '{source.id}.parquet' again; "
+            "if the export is running on a schedule, check that the schedule is still firing."
         )
     return (
         f"Upload an extract of {source.snowflake_object} "
@@ -227,7 +237,16 @@ def build_coverage_matrix(
         if metric_requirements
         else []
     )
-    return CoverageMatrix(as_of=reference, mode=mode, sources=sources, metrics=metrics)
+    # Freshness arithmetic stays naive because Snowflake's ACCOUNT_USAGE stamps
+    # land that way, but the reported `as_of` is labelled UTC — which is what
+    # those stamps are — so every timestamp this API returns carries an offset
+    # and a client never has to guess which zone a bare one is in.
+    return CoverageMatrix(as_of=as_utc(reference), mode=mode, sources=sources, metrics=metrics)
+
+
+def as_utc(value: datetime) -> datetime:
+    """Label a naive account-usage timestamp as the UTC it already is."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def registry_metric_requirements(registry: SourceRegistry) -> dict[str, list[str]]:

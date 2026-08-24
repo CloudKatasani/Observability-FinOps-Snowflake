@@ -33,7 +33,9 @@ sql: |
     q."PARTITIONS_SCANNED"                                AS PARTITIONS_SCANNED,
     q."PARTITIONS_TOTAL"                                  AS PARTITIONS_TOTAL,
     q."PERCENTAGE_SCANNED_FROM_CACHE"                     AS CACHE_FRACTION,
-    MONEY(COALESCE(a."CREDITS_ATTRIBUTED_COMPUTE", 0))    AS CREDITS_ATTRIBUTED
+    MONEY(COALESCE(a."CREDITS_ATTRIBUTED_COMPUTE", 0))    AS CREDITS_ATTRIBUTED,
+    -- Landing time: its gap from STARTED_AT is this platform's own freshness.
+    TS_PARSE(q."_LOADED_AT")                              AS LANDED_AT
   FROM query_history AS q
   LEFT JOIN query_attribution_history AS a
     ON a."QUERY_ID" = q."QUERY_ID"
@@ -68,3 +70,9 @@ dimensions:
   - name: team
     expression: COALESCE(QUERY_TAG_TEAM, 'UNATTRIBUTED')
     description: Team from the query tag; UNATTRIBUTED when the tag is absent.
+  - name: allocation_method
+    expression: >
+      CASE WHEN QUERY_TAG_TEAM IS NULL THEN 'RESIDUAL_POOL' ELSE 'DIRECT_TAG' END
+    description: >
+      How the query's credits reach a team — directly from its own tag, or via
+      the residual pool spread pro-rata over tagged usage (HLD §10.2).

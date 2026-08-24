@@ -133,6 +133,12 @@ class CompiledQuery:
     limit: int
     fingerprint: str
     entities_used: list[str] = field(default_factory=list)
+    #: The sources that actually gate this figure's completeness, which is not
+    #: the same set as ``sources_used``: an entity view may join a slow source
+    #: for a column this query never selects. Without this, a caller looking up
+    #: the latency of everything in ``sources_used`` would report a query as
+    #: eight hours stale when it is final in forty-five minutes.
+    gating_sources: list[str] = field(default_factory=list)
 
     @property
     def cache_key(self) -> str:
@@ -443,6 +449,7 @@ class SemanticCompiler:
             limit=request.limit,
             fingerprint=fingerprint,
             entities_used=entity_ids,
+            gating_sources=sorted({s for m in metrics for s in m.requires_sources}),
         )
 
     @staticmethod

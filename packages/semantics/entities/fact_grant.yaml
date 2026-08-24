@@ -1,0 +1,52 @@
+id: fact_grant
+name: Role grant to user
+kind: fact
+description: >
+  Role membership from GRANTS_TO_USERS, including revoked grants (DELETED_ON
+  set) so an access review can see what was removed as well as what remains.
+  CREATED_ON is the grant time and is used as the entity's time column, which is
+  what makes "new grants this week" a windowed question rather than a diff of
+  two snapshots.
+
+  The USERS snapshot is joined on the grantee (one row per user, so no fan-out)
+  purely to carry DISABLED and TYPE onto the grant. Without it, "a disabled
+  account still holds a role" — the finding an access review exists to produce —
+  would need a join the metric layer cannot express.
+sources: [grants_to_users, users]
+grain: [ROLE_NAME, GRANTEE_NAME, GRANTED_AT]
+time_column: GRANTED_AT
+sql: |
+  SELECT
+    g."ROLE"                                              AS ROLE_NAME,
+    g."GRANTED_TO"                                        AS GRANTED_TO,
+    g."GRANTEE_NAME"                                      AS GRANTEE_NAME,
+    g."GRANTED_BY"                                        AS GRANTED_BY,
+    TS_PARSE(g."CREATED_ON")                              AS GRANTED_AT,
+    TS_PARSE(g."DELETED_ON")                              AS REVOKED_AT,
+    COALESCE(u."DISABLED", FALSE)                         AS GRANTEE_DISABLED,
+    u."TYPE"                                              AS GRANTEE_TYPE,
+    TS_PARSE(u."LAST_SUCCESS_LOGIN")                      AS GRANTEE_LAST_LOGIN_AT
+  FROM grants_to_users AS g
+  LEFT JOIN users AS u
+    ON u."NAME" = g."GRANTEE_NAME"
+dimensions:
+  - name: role
+    expression: ROLE_NAME
+    description: Role granted.
+  - name: grantee
+    expression: GRANTEE_NAME
+    description: User the role was granted to.
+  - name: granted_by
+    expression: COALESCE(GRANTED_BY, 'UNKNOWN')
+    description: Role that issued the grant.
+  - name: grantee_type
+    expression: COALESCE(GRANTEE_TYPE, 'UNKNOWN')
+    description: PERSON, SERVICE, or LEGACY_SERVICE.
+  - name: grant_status
+    expression: CASE WHEN REVOKED_AT IS NULL THEN 'ACTIVE' ELSE 'REVOKED' END
+    description: Whether the grant is still in force.
+  - name: privilege_tier
+    expression: >
+      CASE WHEN ROLE_NAME IN ('ACCOUNTADMIN', 'SECURITYADMIN', 'ORGADMIN')
+           THEN 'PRIVILEGED' ELSE 'STANDARD' END
+    description: PRIVILEGED for the account-administration roles, STANDARD otherwise.

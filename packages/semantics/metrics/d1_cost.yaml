@@ -98,7 +98,7 @@
   format: {type: currency, decimals: 2, unit: USD}
   grain: day
   dimensions: [usage_day, account, usage_type]
-  synonyms: [spend, dollars, cost in currency, bill]
+  synonyms: [spend, spending, dollars, cost in currency, bill, how much are we spending]
   description: >
     Spend in contract currency from ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY.
     Values restate until month close, so recent figures carry a provisional badge.

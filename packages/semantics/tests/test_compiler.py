@@ -47,6 +47,62 @@ def test_every_metric_declares_a_latency_floor_at_least_as_slow_as_its_sources()
         assert metric.latency_floor_minutes >= slowest, metric.id
 
 
+def test_every_metric_declares_the_sources_its_expression_actually_reads() -> None:
+    """R7's other half: the declared source list must also be *complete*.
+
+    A floor that is consistent with an incomplete declaration is still a false
+    promise. ``fact_query_execution`` left-joins the 8-hour attribution view
+    into the same row set as the 45-minute query history, so a metric summing
+    ``CREDITS_ATTRIBUTED`` while declaring only ``query_history`` would pass
+    the floor check and still tell a user their credit figure is three-quarters
+    of an hour old.
+    """
+    from snowobs_semantics.model import _sources_behind_expression
+
+    model = default_model()
+    for metric in model.metrics.values():
+        implied = _sources_behind_expression(metric, model.entity(metric.entity))
+        assert implied <= set(metric.requires_sources), (
+            f"{metric.id} reads {sorted(implied - set(metric.requires_sources))} "
+            "without declaring it"
+        )
+
+
+def test_column_provenance_separates_a_view_s_fast_and_slow_sources() -> None:
+    """The inference the check above depends on, asserted directly."""
+    from snowobs_semantics.model import _sources_behind_expression
+
+    model = default_model()
+    entity = model.entity("fact_query_execution")
+
+    class _Expression:
+        def __init__(self, expression: str) -> None:
+            self.expression = expression
+
+    # A row count is final when query history lands; the credit column is not.
+    assert _sources_behind_expression(_Expression("COUNT(*)"), entity) == set()
+    assert _sources_behind_expression(_Expression("SUM(BYTES_SCANNED)"), entity) == {
+        "query_history"
+    }
+    assert _sources_behind_expression(_Expression("SUM(CREDITS_ATTRIBUTED)"), entity) == {
+        "query_attribution_history"
+    }
+
+
+def test_gating_sources_are_narrower_than_sources_used(compiler: SemanticCompiler) -> None:
+    """A query that never selects the slow column must not be reported as slow."""
+    compiled = compiler.compile(MetricRequest(metrics=["q.volume"]), Dialect.DUCKDB)
+    # The entity view joins attribution, so the SQL genuinely reads it …
+    assert "query_attribution_history" in compiled.sources_used
+    # … but a count of queries is complete without it.
+    assert compiled.gating_sources == ["query_history"]
+    assert compiled.latency_floor_minutes == 45
+
+    credits = compiler.compile(MetricRequest(metrics=["q.offender_credits"]), Dialect.DUCKDB)
+    assert "query_attribution_history" in credits.gating_sources
+    assert credits.latency_floor_minutes == 480
+
+
 def test_unknown_metric_is_a_configuration_error() -> None:
     with pytest.raises(ConfigurationError, match="Unknown metric"):
         default_model().metric("cost.does_not_exist")
@@ -214,6 +270,35 @@ def test_no_shim_name_is_claimed_by_sqlglot() -> None:
     from snowobs_semantics.dialect_shims import assert_shim_names_are_unclaimed
 
     assert_shim_names_are_unclaimed()
+
+
+def test_no_shim_rendering_is_transposed_when_re_parsed() -> None:
+    """The other silent-bypass shape: a rendering the target dialect re-reads.
+
+    ``DATE_DIFF_DAYS`` rendered ``DATE_DIFF('day', start, end)``, which
+    SQLGlot's Snowflake reader took for the ``(end, start, unit)`` positional
+    form and emitted as ``DATEDIFF(end, start, 'day')`` — a day count computed
+    from the wrong pair of arguments, with nothing raised anywhere.
+    """
+    from snowobs_semantics.dialect_shims import assert_shim_renderings_survive_round_trip
+
+    assert_shim_renderings_survive_round_trip()
+
+
+def test_date_diff_days_counts_forwards_in_both_dialects() -> None:
+    """The regression itself: a later date minus an earlier one is positive."""
+    import duckdb
+
+    sql = "SELECT DATE_DIFF_DAYS(TIMESTAMP '2026-01-01', TIMESTAMP '2026-01-08') AS d"
+    for dialect in Dialect:
+        rendered = apply_shims(sql, dialect)
+        if dialect is Dialect.DUCKDB:
+            assert duckdb.sql(rendered).fetchone() == (7,)
+        else:
+            # The Snowflake spelling cannot execute here, but the transposition
+            # was plain in the text: the unit must lead and the earlier
+            # timestamp must be the second argument, not the last.
+            assert "DATEDIFF(DAY, CAST('2026-01-01' AS TIMESTAMPNTZ)" in rendered
 
 
 def test_safe_ratio_is_fixed_point_and_null_safe_in_both_dialects() -> None:

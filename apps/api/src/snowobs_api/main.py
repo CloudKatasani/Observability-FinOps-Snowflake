@@ -16,7 +16,16 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from snowobs_api.routers import chargeback, connections, datasets, health, meta, metrics
+from snowobs_api.routers import (
+    agents,
+    chargeback,
+    connections,
+    datasets,
+    health,
+    meta,
+    metrics,
+    products,
+)
 from snowobs_common import __version__
 from snowobs_common.config import Settings, load_settings
 from snowobs_common.errors import AppError
@@ -78,6 +87,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(metrics.router)
     app.include_router(chargeback.router)
     app.include_router(connections.router)
+    app.include_router(products.router)
+    app.include_router(agents.router)
     return app
 
 

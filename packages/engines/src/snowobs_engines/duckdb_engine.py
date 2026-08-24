@@ -66,6 +66,7 @@ class DuckDBEngine:
             executed_sql=guarded.sql,
             dialect=Dialect.DUCKDB,
             sources=list(compiled.sources_used),
+            gating_sources=list(compiled.gating_sources),
             as_of=datetime.now(tz=UTC),
             latency_floor_minutes=compiled.latency_floor_minutes,
             provisional=compiled.provisional,

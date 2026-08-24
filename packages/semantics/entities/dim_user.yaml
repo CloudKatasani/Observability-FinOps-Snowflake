@@ -1,0 +1,58 @@
+id: dim_user
+name: User
+kind: dimension
+description: >
+  Current user inventory from the USERS snapshot, including dropped users
+  (DELETED_ON set). EMAIL is deliberately not selected: it is classified
+  restricted in the source registry and no metric in this layer needs it (§12.5).
+
+  DAYS_SINCE_LAST_LOGIN is measured against SNAPSHOT_AT — the newest successful
+  login anywhere in the snapshot — rather than wall-clock time. That keeps the
+  dormancy cohort reproducible across runs and honest about what the snapshot
+  can actually see: an account with no logins at all cannot be aged.
+sources: [users]
+grain: [USER_NAME]
+scd: type2
+sql: |
+  SELECT
+    "USER_ID"                                             AS USER_ID,
+    "NAME"                                                AS USER_NAME,
+    "LOGIN_NAME"                                          AS LOGIN_NAME,
+    "DEFAULT_ROLE"                                        AS DEFAULT_ROLE,
+    "DEFAULT_WAREHOUSE"                                   AS DEFAULT_WAREHOUSE,
+    "TYPE"                                                AS USER_TYPE,
+    COALESCE("DISABLED", FALSE)                           AS IS_DISABLED,
+    COALESCE("HAS_PASSWORD", FALSE)                       AS HAS_PASSWORD,
+    COALESCE("HAS_RSA_PUBLIC_KEY", FALSE)                 AS HAS_RSA_PUBLIC_KEY,
+    TS_PARSE("LAST_SUCCESS_LOGIN")                        AS LAST_SUCCESS_LOGIN_AT,
+    TS_PARSE("CREATED_ON")                                AS CREATED_AT,
+    TS_PARSE("DELETED_ON")                                AS DELETED_AT,
+    MAX(TS_PARSE("LAST_SUCCESS_LOGIN")) OVER ()           AS SNAPSHOT_AT,
+    SAFE_RATIO(
+      EPOCH_SECONDS(
+        TS_PARSE("LAST_SUCCESS_LOGIN"),
+        MAX(TS_PARSE("LAST_SUCCESS_LOGIN")) OVER ()
+      ),
+      86400
+    )                                                     AS DAYS_SINCE_LAST_LOGIN
+  FROM users
+dimensions:
+  - name: user
+    expression: USER_NAME
+    description: User name.
+  - name: user_type
+    expression: COALESCE(USER_TYPE, 'UNKNOWN')
+    description: PERSON, SERVICE, or LEGACY_SERVICE.
+  - name: default_role
+    expression: COALESCE(DEFAULT_ROLE, 'NONE')
+    description: Role the user assumes on connect when none is specified.
+  - name: account_status
+    expression: CASE WHEN IS_DISABLED THEN 'DISABLED' ELSE 'ACTIVE' END
+    description: Whether the user is currently disabled.
+  - name: credential_type
+    expression: >
+      CASE WHEN HAS_RSA_PUBLIC_KEY AND HAS_PASSWORD THEN 'KEY_AND_PASSWORD'
+           WHEN HAS_RSA_PUBLIC_KEY THEN 'KEY_PAIR'
+           WHEN HAS_PASSWORD THEN 'PASSWORD_ONLY'
+           ELSE 'FEDERATED_OR_NONE' END
+    description: Credentials configured on the user — the key-pair rollout view.

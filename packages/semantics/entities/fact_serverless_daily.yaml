@@ -1,0 +1,36 @@
+id: fact_serverless_daily
+name: Serverless task credits (daily)
+kind: fact
+description: >
+  Serverless task compute rolled to one row per task per day from
+  SERVERLESS_TASK_HISTORY. These credits never appear against a warehouse, so
+  they are invisible to every warehouse-based cost view — which is exactly how
+  serverless spend grows unnoticed. Rolling to day grain here keeps the entity
+  joinable with the daily cost facts without fan-out.
+sources: [serverless_task_history]
+grain: [TASK_NAME, USAGE_DAY]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    "TASK_NAME"                                           AS TASK_NAME,
+    "TASK_ID"                                             AS TASK_ID,
+    "DATABASE_NAME"                                       AS DATABASE_NAME,
+    "SCHEMA_NAME"                                         AS SCHEMA_NAME,
+    CAST(TS_TRUNC('day', TS_PARSE("START_TIME")) AS DATE) AS USAGE_DAY,
+    MONEY(SUM("CREDITS_USED"))                            AS CREDITS_USED,
+    COUNT(*)                                              AS RUN_COUNT
+  FROM serverless_task_history
+  GROUP BY 1, 2, 3, 4, 5
+dimensions:
+  - name: task
+    expression: TASK_NAME
+    description: Serverless task name.
+  - name: database
+    expression: DATABASE_NAME
+    description: Database the task is defined in.
+  - name: task_schema
+    expression: SCHEMA_NAME
+    description: Schema the task is defined in.
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date.

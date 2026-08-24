@@ -1,0 +1,227 @@
+# D7 — Security, access & governance (BUILD_PROMPT §9.2).
+#
+# These metrics are counts of configuration and behaviour, never of content:
+# nothing here reads a query's text, a column's values, or a user's email. The
+# MFA-readiness signals matter on a clock — single-factor password logins are
+# blocked from October 2026 — so sec.single_factor_logins is a countdown, not a
+# hygiene score.
+- id: sec.failed_login_rate
+  name: Failed login rate
+  domain: security
+  entity: fact_login
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN IS_SUCCESS = 'NO' THEN 1 ELSE 0 END),
+      COUNT(*)
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [user, client_type, error_class, first_factor]
+  synonyms: [login failure rate, authentication failures, failed auth rate]
+  description: >
+    Share of authentication attempts that failed. A background rate of a few
+    percent is normal — mistyped passwords, expired sessions. A step change on
+    one user or one client type is not, and that is what the slice is for.
+  requires_sources: [login_history]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  thresholds: {warn: 0.10, critical: 0.25}
+  owner: security
+  verified_queries: ["failed login rate this week", "login failures by client"]
+
+- id: sec.failed_logins
+  name: Failed logins
+  domain: security
+  entity: fact_login
+  expression: SUM(CASE WHEN IS_SUCCESS = 'NO' THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [user, error_class, client_type, client_ip]
+  synonyms: [failed logins per user, bad password attempts, brute force]
+  description: >
+    Count of failed authentication attempts. Per user and per source IP this is
+    the shape a credential-stuffing attempt makes: many failures against many
+    users from few addresses, or many failures against one user from many.
+  requires_sources: [login_history]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  owner: security
+  verified_queries: ["users with the most failed logins", "failed logins by IP"]
+
+- id: sec.single_factor_logins
+  name: Single-factor logins
+  domain: security
+  entity: fact_login
+  expression: >
+    SUM(CASE WHEN IS_SUCCESS = 'YES' AND SECOND_AUTH_FACTOR IS NULL
+             THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [user, first_factor, client_type]
+  synonyms: [no mfa, single factor, mfa gap, password only logins]
+  description: >
+    Successful logins that presented no second authentication factor. Snowflake
+    blocks single-factor password sign-in from October 2026, so this is a
+    migration burn-down: every login counted here is one that will stop working.
+    Key-pair service authentication legitimately has no second factor and shows
+    up here too — slice by first_factor to separate the two populations.
+  requires_sources: [login_history]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  owner: security
+  verified_queries: ["who still logs in without MFA", "single factor logins by user"]
+
+- id: sec.client_type_spread
+  name: Distinct client types per user
+  domain: security
+  entity: fact_login
+  expression: COUNT(DISTINCT CLIENT_TYPE)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [user, first_factor]
+  synonyms: [new client, client fingerprint, unusual driver, tooling spread]
+  description: >
+    Number of distinct reported client types a user authenticated from. It is a
+    coarse fingerprint — REPORTED_CLIENT_TYPE is self-declared by the driver and
+    trivially spoofable — but a service account that has used one driver for a
+    year and suddenly reports two is worth a question.
+  requires_sources: [login_history]
+  latency_floor_minutes: 120
+  direction: neutral
+  owner: security
+  verified_queries: ["users connecting from new clients"]
+
+- id: sec.distinct_client_ips
+  name: Distinct client IPs per user
+  domain: security
+  entity: fact_login
+  expression: COUNT(DISTINCT CLIENT_IP)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [user, client_type, first_factor]
+  synonyms: [source addresses, ip spread, impossible travel, connection origins]
+  description: >
+    Number of distinct source addresses a user authenticated from. A service
+    account pinned to a network allowlist should be a small constant; a jump is
+    either an infrastructure change nobody mentioned or a credential in the
+    wrong hands.
+  requires_sources: [login_history]
+  latency_floor_minutes: 120
+  direction: neutral
+  thresholds: {warn: 10, critical: 25}
+  owner: security
+  verified_queries: ["users logging in from many IPs", "IP spread for SVC accounts"]
+
+- id: sec.dormant_users
+  name: Dormant users
+  domain: security
+  entity: dim_user
+  expression: >
+    COUNT(DISTINCT CASE WHEN DAYS_SINCE_LAST_LOGIN >= 90 AND NOT IS_DISABLED
+                        THEN USER_NAME END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [user_type, default_role, account_status, credential_type]
+  synonyms: [inactive users, unused accounts, dormant accounts, stale users]
+  description: >
+    Enabled users with no successful login in 90 days. Every one is a live
+    credential with no owner watching it — the cheapest access risk to remove
+    and the one most often left alone because nobody is sure who it belongs to.
+    Age is measured against the newest login in the snapshot, so the cohort is
+    stable between runs.
+  requires_sources: [users]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  owner: security
+  verified_queries: ["dormant users", "accounts with no login in 90 days"]
+
+- id: sec.users_without_key_pair
+  name: Users without an RSA key
+  domain: security
+  entity: dim_user
+  expression: >
+    COUNT(DISTINCT CASE WHEN NOT HAS_RSA_PUBLIC_KEY AND NOT IS_DISABLED
+                        THEN USER_NAME END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [user_type, credential_type, default_role]
+  synonyms: [no key pair, password auth, key pair rollout, rsa key gap]
+  description: >
+    Enabled users with no RSA public key configured. Sliced by user_type this is
+    the key-pair rollout backlog for service accounts, which cannot use
+    interactive MFA and must move to key-pair authentication before password
+    sign-in is blocked.
+  requires_sources: [users]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  owner: security
+  verified_queries: ["service accounts without a key pair", "key pair rollout progress"]
+
+- id: sec.disabled_but_granted_users
+  name: Disabled users still holding roles
+  domain: security
+  entity: fact_grant
+  expression: >
+    COUNT(DISTINCT CASE WHEN GRANTEE_DISABLED AND REVOKED_AT IS NULL
+                        THEN GRANTEE_NAME END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [role, grantee_type, privilege_tier, granted_by]
+  synonyms: [disabled but granted, orphaned grants, deprovisioning gap]
+  description: >
+    Disabled accounts that still hold live role grants. Disabling a user stops
+    them logging in but leaves the grant graph untouched, so this is the
+    deprovisioning tail: the difference between "cannot sign in today" and
+    "has no access", which is the difference that matters if the account is ever
+    re-enabled.
+  requires_sources: [grants_to_users, users]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  thresholds: {warn: 1, critical: 5}
+  owner: security
+  verified_queries: ["disabled users who still have roles", "deprovisioning gaps"]
+
+- id: sec.privileged_grants
+  name: ACCOUNTADMIN-adjacent grants
+  domain: security
+  entity: fact_grant
+  expression: >
+    SUM(CASE WHEN ROLE_NAME IN ('ACCOUNTADMIN', 'SECURITYADMIN', 'ORGADMIN')
+              AND REVOKED_AT IS NULL
+             THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [role, grantee, granted_by, grantee_type]
+  synonyms: [accountadmin, privileged access, admin roles, super users]
+  description: >
+    Live grants of ACCOUNTADMIN, SECURITYADMIN, or ORGADMIN. These roles can
+    change billing, read every object, and rewrite the access model, so the
+    right number is small, known, and unchanging — and any movement in it should
+    be traceable to a ticket. Revoked grants are excluded so the figure is
+    current holdings rather than everything ever granted.
+  requires_sources: [grants_to_users, users]
+  latency_floor_minutes: 120
+  direction: lower_is_better
+  thresholds: {warn: 5, critical: 10}
+  owner: security
+  verified_queries: ["who has ACCOUNTADMIN", "privileged role grants"]
+
+- id: sec.new_grants
+  name: New grants in window
+  domain: security
+  entity: fact_grant
+  expression: COUNT(*)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [role, grantee, granted_by, privilege_tier, grantee_type]
+  synonyms: [privilege drift, new access, grants issued, access changes]
+  description: >
+    Grants created inside the requested window, from GRANTS_TO_USERS.CREATED_ON.
+    This is the privilege-drift feed: a review reads it in date order and asks
+    who approved each row. Sliced by privilege_tier it separates routine team
+    membership from a new administrator.
+  requires_sources: [grants_to_users, users]
+  latency_floor_minutes: 120
+  direction: neutral
+  owner: security
+  verified_queries: ["new grants this week", "privileged grants issued recently"]

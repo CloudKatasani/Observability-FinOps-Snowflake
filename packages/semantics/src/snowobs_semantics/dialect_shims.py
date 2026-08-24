@@ -12,6 +12,7 @@ rewrites each call into the target dialect. Every shim carries a parity test in
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -124,7 +125,20 @@ def _regex_contains_duckdb(args: list[str]) -> str:
     return f"regexp_matches({args[0]}, {args[1]})"
 
 
-def _date_diff_days(args: list[str]) -> str:
+def _date_diff_days_snowflake(args: list[str]) -> str:
+    """Whole days from ``args[0]`` to ``args[1]``.
+
+    ``DATE_DIFF`` is *not* usable here even though Snowflake accepts it as a
+    synonym: SQLGlot's Snowflake reader treats ``DATE_DIFF(a, b, c)`` as the
+    three-positional-argument form ``(end, start, unit)``, so the shim's
+    ``(unit, start, end)`` rendering came back out transposed as
+    ``DATEDIFF(B, a, 'day')`` — valid SQL computing nonsense. ``DATEDIFF``
+    parses unambiguously, so the shim emits that spelling instead.
+    """
+    return f"DATEDIFF('day', {args[0]}, {args[1]})"
+
+
+def _date_diff_days_duckdb(args: list[str]) -> str:
     return f"DATE_DIFF('day', {args[0]}, {args[1]})"
 
 
@@ -185,7 +199,10 @@ SHIMS: dict[str, Shim] = {
     "DATE_DIFF_DAYS": Shim(
         name="DATE_DIFF_DAYS",
         arity=(2, 2),
-        render={Dialect.SNOWFLAKE: _date_diff_days, Dialect.DUCKDB: _date_diff_days},
+        render={
+            Dialect.SNOWFLAKE: _date_diff_days_snowflake,
+            Dialect.DUCKDB: _date_diff_days_duckdb,
+        },
         description="Whole days between two dates/timestamps.",
     ),
     "EPOCH_SECONDS": Shim(
@@ -232,6 +249,77 @@ def assert_shim_names_are_unclaimed() -> None:
             "Shim names collide with SQLGlot built-ins and would be silently "
             f"bypassed: {claimed}. Rename the shim."
         )
+
+
+#: Probe identifiers used to check that a shim's rendering survives the
+#: round-trip through its own dialect. They are deliberately unlike any
+#: keyword or unit name so that a dialect reader cannot mistake one for a
+#: literal it recognises.
+_PROBE_ARGUMENTS = ("shimarg1", "shimarg2", "shimarg3", "shimarg4")
+
+
+def assert_shim_renderings_survive_round_trip() -> None:
+    """Fail loudly if a shim's rendering changes meaning when re-parsed.
+
+    ``apply_shims`` renders a shim to SQL text and then parses that text *in
+    the target dialect* before splicing it back into the tree. That second
+    parse is where a rendering can quietly change meaning: SQLGlot read
+    ``DATE_DIFF('day', start, end)`` as Snowflake's three-positional-argument
+    ``(end, start, unit)`` form and emitted ``DATEDIFF(end, start, 'day')`` —
+    valid SQL, wrong answer, no error anywhere.
+
+    Argument order is the property worth checking, because a shim that loses
+    it produces a number rather than a failure. Each shim is rendered with
+    distinctive probe identifiers, and the sequence of probes in the
+    parsed-then-re-emitted SQL must match the sequence in the text the shim
+    actually authored. Comparing against the *rendering* rather than against
+    the input order is deliberate: a rendering may legitimately reorder or
+    repeat its arguments — ``SAFE_RATIO`` guards its denominator before it
+    divides — and only the parser changing that is a defect.
+    """
+    problems: list[str] = []
+    for name, shim in SHIMS.items():
+        low, _high = shim.arity
+        for dialect in Dialect:
+            args = _positional_probe_arguments(name, low)
+            probes = [arg for arg in args if arg in _PROBE_ARGUMENTS]
+            if not probes:
+                continue
+            rendered = shim.render[dialect](args)
+            try:
+                round_tripped = _parse(rendered, dialect=dialect.value).sql(dialect=dialect.value)
+            except Exception as exc:
+                problems.append(f"{name}/{dialect.value}: rendering does not re-parse ({exc})")
+                continue
+            authored = re.findall(r"shimarg\d", rendered.lower())
+            survived = re.findall(r"shimarg\d", round_tripped.lower())
+            if survived != authored:
+                problems.append(
+                    f"{name}/{dialect.value}: argument placement changed on re-parse — "
+                    f"authored {authored}, re-parsed as {survived} in {round_tripped!r}"
+                )
+    if problems:
+        raise ShimError(
+            "Shim renderings do not survive re-parsing in their own dialect: " + "; ".join(problems)
+        )
+
+
+def _positional_probe_arguments(name: str, count: int) -> list[str]:
+    """Probe arguments for one shim, keeping any argument that must be a literal.
+
+    Some shims take a unit or a format string in a fixed position and would not
+    parse with an identifier there, so those positions keep a real literal and
+    are simply not checked for ordering.
+    """
+    fixed: dict[str, dict[int, str]] = {
+        "TS_TRUNC": {0: "'day'"},
+        "TS_PARSE": {},
+        "PERCENTILE": {1: "0.95"},
+        "JSON_GET": {1: "'key'"},
+        "REGEX_CONTAINS": {1: "'pattern'"},
+    }
+    literals = fixed.get(name, {})
+    return [literals.get(index, _PROBE_ARGUMENTS[index]) for index in range(count)]
 
 
 #: A shim's rendering can itself contain shim calls (``TS_TRUNC`` wrapping

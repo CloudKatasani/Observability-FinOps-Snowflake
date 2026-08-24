@@ -1,0 +1,151 @@
+# D8 — AI / Cortex & advanced features (BUILD_PROMPT §9.2).
+#
+# AI spend behaves unlike warehouse spend: it arrives suddenly, grows fast, and
+# is driven by a model choice rather than a warehouse size. The metrics here are
+# built to answer "which function, which model, and is the unit economics
+# moving?" before the monthly bill does the asking.
+#
+# CORTEX_FUNCTIONS_USAGE_HISTORY carries an unverified latency (ASSUMPTIONS
+# U-1), so every floor below is the conservative 3 h the registry records. Where
+# CORTEX_AI_FUNCTIONS_USAGE_HISTORY (~5 min) is available, re-point the entity
+# and these floors drop with it.
+- id: ai.total_credits
+  name: Cortex credits
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SUM(TOKEN_CREDITS)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [ai_function, ai_model, usage_day]
+  synonyms: [ai credits, cortex spend, llm cost, ai cost]
+  description: >
+    Total token credits consumed by Cortex functions. This is the whole AI
+    compute bill for LLM functions in one figure, independent of which warehouse
+    issued the call.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["cortex credits this month", "how much are we spending on AI"]
+
+- id: ai.credits_by_function
+  name: Cortex credits by function
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SUM(TOKEN_CREDITS)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [ai_function, ai_model, usage_day]
+  synonyms: [credits per function, cortex function cost, which function costs most]
+  description: >
+    Token credits split by Cortex function. COMPLETE and the embedding functions
+    have very different cost profiles per call, so a rise in the total is only
+    actionable once it is attributed to one of them.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["cortex spend by function", "which cortex function costs the most"]
+
+- id: ai.credits_by_model
+  name: Cortex credits by model
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SUM(TOKEN_CREDITS)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [ai_model, ai_function, usage_day]
+  synonyms: [credits per model, model cost, llm model spend]
+  description: >
+    Token credits split by model. Models are priced per million tokens at very
+    different rates, so a workload that silently switched to a larger model can
+    double its cost with no change in call volume — which is the failure mode
+    this slice exists to catch.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["cortex spend by model", "which model are we paying for"]
+
+- id: ai.total_tokens
+  name: Cortex tokens
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SUM(TOKENS)
+  format: {type: integer, decimals: 0, unit: tokens}
+  grain: day
+  dimensions: [ai_function, ai_model, usage_day]
+  synonyms: [tokens, token volume, ai usage volume]
+  description: >
+    Total tokens processed. This is the workload figure: it tracks what the
+    business actually asked for, unaffected by pricing or model choice, and is
+    the correct denominator for any AI unit-cost question.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: neutral
+  owner: finops
+  verified_queries: ["how many tokens did we process", "token volume by function"]
+
+- id: ai.tokens_per_credit
+  name: Tokens per credit
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SAFE_RATIO(SUM(TOKENS), SUM(TOKEN_CREDITS))
+  format: {type: number, decimals: 0, unit: tokens/credit}
+  grain: day
+  dimensions: [ai_model, ai_function, usage_day]
+  synonyms: [ai unit economics, cost per token, token efficiency, price per token]
+  description: >
+    Tokens processed per credit spent — the AI unit-cost line, inverted so that
+    higher is better. It is flat for a fixed model and moves the moment the
+    model mix changes, which makes it the earliest signal that AI spend growth
+    is a pricing change rather than an adoption one.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: higher_is_better
+  owner: finops
+  verified_queries: ["tokens per credit by model", "is our AI unit cost changing"]
+
+- id: ai.share_of_credits
+  name: AI share of account credits
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SAFE_RATIO(SUM(TOKEN_CREDITS), MAX(ACCOUNT_CREDITS_DAY))
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [ai_function, ai_model, usage_day]
+  synonyms: [ai share, ai percentage of spend, how much of the bill is ai]
+  description: >
+    Cortex token credits as a fraction of the account's total metered credits
+    for the same day. The account total is a per-day constant carried on every
+    row of the entity and is therefore read with MAX rather than SUM — summing
+    it would multiply the denominator by the number of function/model pairs
+    active that day. Declared at day grain for the same reason: at a coarser
+    bucket the single-day constant no longer stands for the period.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: neutral
+  thresholds: {warn: 0.10, critical: 0.25}
+  owner: finops
+  verified_queries: ["what share of our bill is AI", "AI share of credits this month"]
+
+- id: ai.daily_credits
+  name: Daily AI credits (growth series)
+  domain: ai
+  entity: fact_ai_usage_daily
+  expression: SUM(TOKEN_CREDITS)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [usage_day, ai_function, ai_model]
+  synonyms: [ai growth, day over day ai spend, ai trend, ai run rate]
+  description: >
+    Token credits per day, bucketed at day grain and ordered for trend analysis.
+    It is deliberately the same sum as ai.total_credits rather than a computed
+    growth percentage: the day-over-day comparison, the growth rate, and the
+    forecast are all derived from this series downstream, and each of them wants
+    the raw daily figure rather than a pre-differenced one.
+  requires_sources: [cortex_functions_usage_history, metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["daily AI credits", "is AI spend growing"]

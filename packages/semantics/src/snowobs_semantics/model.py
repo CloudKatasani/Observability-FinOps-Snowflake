@@ -273,6 +273,86 @@ def _validate(model: SemanticModel) -> None:
                 f"Metric {metric.id} claims a {metric.latency_floor_minutes}-minute latency "
                 f"floor but its sources document {floor} minutes"
             )
+        # R7, the other direction: the check above only proves the declared
+        # floor is consistent with the declared sources. It says nothing about
+        # whether the declaration is *complete* — and an entity view can join
+        # several sources of very different latency, so a metric reading a
+        # slow column while declaring only the fast source would pass while
+        # quietly promising freshness it cannot deliver. `q.volume` counting
+        # rows is genuinely final at 45 minutes; a metric summing
+        # CREDITS_ATTRIBUTED from the same view is not, and only the columns
+        # it touches distinguish the two.
+        implied = _sources_behind_expression(metric, entity)
+        undeclared = sorted(implied - set(metric.requires_sources))
+        if undeclared:
+            raise ConfigurationError(
+                f"Metric {metric.id} reads columns that {entity.id} derives from "
+                f"{undeclared}, which it does not declare in requires_sources. "
+                "Declare them (and raise latency_floor_minutes to match) so the "
+                "metric cannot claim to be fresher than the data it reads."
+            )
+
+
+@lru_cache(maxsize=64)
+def _column_provenance(entity_sql: str, sources: tuple[str, ...]) -> dict[str, frozenset[str]]:
+    """Map each output column of an entity view to the sources it is built from.
+
+    The entity's SQL is the only place that mapping exists, so it is read from
+    there rather than restated in YAML where it could drift. Table aliases are
+    resolved back to source names via the FROM/JOIN clauses; a column whose
+    expression names no table (a literal, or a bare reference in a view with a
+    single source) is attributed to the sole source when there is only one, and
+    otherwise left unattributed rather than guessed at.
+    """
+    import sqlglot
+    from sqlglot import exp
+
+    provenance: dict[str, frozenset[str]] = {}
+    try:
+        tree = sqlglot.parse_one(entity_sql, read="duckdb")
+    except Exception:
+        return provenance
+
+    alias_to_source: dict[str, str] = {}
+    for table in tree.find_all(exp.Table):
+        name = table.name
+        if name in sources:
+            alias_to_source[(table.alias or name).lower()] = name
+
+    select = tree.find(exp.Select)
+    if select is None:
+        return provenance
+
+    for projection in select.expressions:
+        output = projection.alias_or_name.upper()
+        referenced = {
+            alias_to_source[column.table.lower()]
+            for column in projection.find_all(exp.Column)
+            if column.table and column.table.lower() in alias_to_source
+        }
+        if not referenced and len(sources) == 1:
+            referenced = {sources[0]}
+        provenance[output] = frozenset(referenced)
+    return provenance
+
+
+def _sources_behind_expression(metric: Metric, entity: Entity) -> set[str]:
+    """Which of the entity's sources the metric's own expression depends on."""
+    import sqlglot
+    from sqlglot import exp
+
+    provenance = _column_provenance(entity.sql, tuple(entity.sources))
+    if not provenance:
+        return set()
+    try:
+        parsed = sqlglot.parse_one(metric.expression, read="duckdb")
+    except Exception:
+        return set()
+
+    implied: set[str] = set()
+    for column in parsed.find_all(exp.Column):
+        implied |= provenance.get(column.name.upper(), frozenset())
+    return implied
 
 
 def _resolvable(model: SemanticModel, entity: Entity, dimension: str) -> bool:

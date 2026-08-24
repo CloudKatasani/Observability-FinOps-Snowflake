@@ -1,0 +1,40 @@
+id: fact_storage_daily
+name: Storage by database (daily)
+kind: fact
+description: >
+  Per-database daily average storage from DATABASE_STORAGE_USAGE_HISTORY, with
+  the account-level totals from STORAGE_USAGE carried alongside so a database's
+  share of the account footprint needs no second query. The previous day's
+  active bytes travel on every row, which makes growth an aggregate rather than
+  a self-join — and keeps the growth metric fan-out safe.
+sources: [database_storage_usage_history, storage_usage]
+grain: [DATABASE_NAME, USAGE_DAY]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    d."DATABASE_NAME"                                     AS DATABASE_NAME,
+    d."DATABASE_ID"                                       AS DATABASE_ID,
+    CAST(d."USAGE_DATE" AS DATE)                          AS USAGE_DAY,
+    d."AVERAGE_DATABASE_BYTES"                            AS ACTIVE_BYTES,
+    d."AVERAGE_FAILSAFE_BYTES"                            AS FAILSAFE_BYTES,
+    COALESCE(d."AVERAGE_HYBRID_TABLE_STORAGE_BYTES", 0)   AS HYBRID_TABLE_BYTES,
+    -- Yesterday's figure for the same database. Computed over the whole
+    -- retained window, so the first day inside a requested range still has a
+    -- comparison point instead of a null growth rate.
+    LAG(d."AVERAGE_DATABASE_BYTES") OVER (
+      PARTITION BY d."DATABASE_NAME"
+      ORDER BY CAST(d."USAGE_DATE" AS DATE)
+    )                                                     AS ACTIVE_BYTES_PRIOR_DAY,
+    a."STORAGE_BYTES"                                     AS ACCOUNT_STORAGE_BYTES,
+    a."STAGE_BYTES"                                       AS ACCOUNT_STAGE_BYTES,
+    a."FAILSAFE_BYTES"                                    AS ACCOUNT_FAILSAFE_BYTES
+  FROM database_storage_usage_history AS d
+  LEFT JOIN storage_usage AS a
+    ON CAST(a."USAGE_DATE" AS DATE) = CAST(d."USAGE_DATE" AS DATE)
+dimensions:
+  - name: database
+    expression: DATABASE_NAME
+    description: Database the storage belongs to.
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date (account timezone).

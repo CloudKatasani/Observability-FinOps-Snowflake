@@ -1,0 +1,66 @@
+id: dim_table_storage
+name: Table storage
+kind: dimension
+description: >
+  Current per-table storage from the TABLE_STORAGE_METRICS snapshot: the only
+  place the four components of a table's bill — active, Time Travel, Fail-safe,
+  and bytes retained for a clone group — are separated. Successive snapshots
+  build the trend; a single snapshot is a point-in-time picture, which is why
+  this entity carries no time column.
+
+  TABLE_STORAGE_METRICS does not publish LAST_ALTERED (that column lives on
+  ACCOUNT_USAGE.TABLES). Until TABLES is landed, the snapshot's TABLE_CREATED
+  is the newest change stamp available here, so DAYS_SINCE_LAST_CHANGE is a
+  lower bound on staleness — a table it calls stale is stale; a table it calls
+  fresh may not be. SNAPSHOT_AT is the batch's landing time, the honest "as of"
+  for a snapshot source.
+sources: [table_storage_metrics]
+grain: [TABLE_ID]
+scd: type2
+sql: |
+  SELECT
+    "ID"                                                  AS TABLE_ID,
+    "TABLE_NAME"                                          AS TABLE_NAME,
+    "TABLE_CATALOG"                                       AS DATABASE_NAME,
+    "TABLE_SCHEMA"                                        AS SCHEMA_NAME,
+    "CLONE_GROUP_ID"                                      AS CLONE_GROUP_ID,
+    "ACTIVE_BYTES"                                        AS ACTIVE_BYTES,
+    "TIME_TRAVEL_BYTES"                                   AS TIME_TRAVEL_BYTES,
+    "FAILSAFE_BYTES"                                      AS FAILSAFE_BYTES,
+    "RETAINED_FOR_CLONE_BYTES"                            AS RETAINED_FOR_CLONE_BYTES,
+    "ACTIVE_BYTES" + "TIME_TRAVEL_BYTES"
+      + "FAILSAFE_BYTES" + "RETAINED_FOR_CLONE_BYTES"     AS TOTAL_BYTES,
+    "RETENTION_TIME"                                      AS RETENTION_DAYS,
+    "IS_TRANSIENT"                                        AS IS_TRANSIENT,
+    COALESCE("DELETED", FALSE)                            AS IS_DELETED,
+    TS_PARSE("TABLE_CREATED")                             AS TABLE_CREATED_AT,
+    TS_PARSE("TABLE_DROPPED")                             AS TABLE_DROPPED_AT,
+    TS_PARSE("TABLE_ENTERED_FAILSAFE")                    AS ENTERED_FAILSAFE_AT,
+    TS_PARSE("_LOADED_AT")                                AS SNAPSHOT_AT,
+    SAFE_RATIO(
+      EPOCH_SECONDS(TS_PARSE("TABLE_CREATED"), TS_PARSE("_LOADED_AT")),
+      86400
+    )                                                     AS DAYS_SINCE_LAST_CHANGE
+  FROM table_storage_metrics
+dimensions:
+  - name: table
+    expression: TABLE_NAME
+    description: Table name.
+  - name: database
+    expression: DATABASE_NAME
+    description: Database (TABLE_CATALOG) the table lives in.
+  - name: table_schema
+    expression: SCHEMA_NAME
+    description: Schema the table lives in.
+  - name: is_transient
+    expression: COALESCE(IS_TRANSIENT, 'NO')
+    description: YES for transient tables, which carry no Fail-safe.
+  - name: retention_policy
+    expression: >
+      CASE WHEN COALESCE(RETENTION_DAYS, 0) > 7 THEN 'EXTENDED'
+           WHEN COALESCE(RETENTION_DAYS, 0) > 1 THEN 'STANDARD'
+           ELSE 'MINIMAL' END
+    description: Time Travel retention band derived from RETENTION_TIME.
+  - name: clone_group
+    expression: COALESCE(CLONE_GROUP_ID, TABLE_ID)
+    description: Clone group; equals the table id when the table is not a clone.

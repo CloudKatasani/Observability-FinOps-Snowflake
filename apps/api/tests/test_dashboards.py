@@ -19,6 +19,7 @@ from snowobs_common.config import Settings
 from snowobs_fixtures.config import GeneratorConfig
 from snowobs_fixtures.generator import generate, write_csv
 from snowobs_ingest.loader import IngestPipeline
+from snowobs_semantics.model import default_model
 
 FIXTURE = GeneratorConfig(days=14, queries_per_day=400)
 START, END = "2026-08-07", "2026-08-20"
@@ -230,6 +231,39 @@ async def test_chargeback_response_carries_the_gate_verdict(settings: Settings) 
 
 
 @pytest.mark.asyncio
+async def test_chargeback_shows_its_own_sql_and_says_whether_it_is_settled(
+    settings: Settings,
+) -> None:
+    """R5 and §15 on the composite response, not just on single metrics.
+
+    An allocation is three metric queries flattened into one answer, and the
+    flattening is exactly where provenance gets dropped: without this the
+    endpoint returned figures a caller could neither trace nor date.
+    """
+    async with client_for(settings) as client:
+        body = (await client.get(f"/api/v1/chargeback/allocation?start={START}&end={END}")).json()
+
+    assert isinstance(body["provisional"], bool)
+    # Every constituent query is shown, each saying what it contributes —
+    # including the two runs of the same metric, which do different jobs.
+    assert len(body["sql"]) == 4
+    purposes = {d["purpose"] for d in body["sql"]}
+    assert len(purposes) == 4, "two queries were given the same explanation"
+    for disclosure in body["sql"]:
+        assert disclosure["purpose"].strip()
+        assert disclosure["metrics"]
+        assert "SELECT" in disclosure["sql"].upper()
+    assert {metric for d in body["sql"] for metric in d["metrics"]} == {
+        "cost.by_warehouse_credits",
+        "cost.by_team_credits",
+        "cost.cloud_services_credits",
+    }
+    # Sources are the ones that gate the figure, so a caller re-deriving the
+    # freshness from them lands on the floor the response already reported.
+    assert "query_attribution_history" in body["sources"]
+
+
+@pytest.mark.asyncio
 async def test_credit_price_absent_yields_null_usd_not_an_invented_number(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
@@ -255,5 +289,31 @@ async def test_coverage_lists_landed_and_missing_sources(settings: Settings) -> 
     assert by_id["metering_daily_history"]["rows"] > 0
     # Anything missing must carry a remediation, never a bare absence (R3).
     for source in body["sources"]:
-        if source["status"] == "missing":
-            assert source["remediation"]
+        if source["status"] != "available":
+            assert source["remediation"], source["source_id"]
+
+
+@pytest.mark.asyncio
+async def test_coverage_answers_the_kpi_question_not_only_the_source_question(
+    settings: Settings,
+) -> None:
+    """R3 is about KPIs: which of the ~90 can a user trust right now?
+
+    The matrix carried an empty `metrics` list, which answered the question
+    about sources and silently dropped the one the page exists to answer.
+    """
+    async with client_for(settings) as client:
+        body = (await client.get("/api/v1/datasets/coverage")).json()
+
+    assert len(body["metrics"]) == len(default_model().metrics)
+    for assessment in body["metrics"]:
+        assert assessment["availability"] in ("enabled", "degraded", "unavailable")
+        # R3: an unavailable KPI names its blocker rather than reading zero.
+        if assessment["availability"] == "unavailable":
+            assert assessment["missing_sources"]
+            assert assessment["explanation"].strip()
+    # On the full fixture account the headline cost KPIs are answerable.
+    by_metric = {a["metric_id"]: a for a in body["metrics"]}
+    assert by_metric["cost.attributed_credits"]["availability"] == "enabled"
+    # Timestamps are offset-aware everywhere, so no client has to guess a zone.
+    assert body["as_of"].endswith("Z") or "+00:00" in body["as_of"]

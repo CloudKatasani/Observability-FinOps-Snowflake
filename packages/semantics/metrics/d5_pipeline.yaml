@@ -1,0 +1,218 @@
+# D5 — Pipeline & orchestration reliability (BUILD_PROMPT §9.2).
+#
+# The organising idea of this domain is root cause over symptom count. A failed
+# root task suspends its graph, so every child reports SKIPPED; counting those
+# as failures turns one incident into thirteen. pipe.root_failures and
+# pipe.skipped_downstream are the two halves of that distinction and are meant
+# to be read together.
+- id: pipe.task_success_rate
+  name: Task success rate
+  domain: pipeline
+  entity: fact_task_run
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN STATE = 'SUCCEEDED' THEN 1 ELSE 0 END),
+      COUNT(*)
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [task, database, task_schema, graph_root]
+  synonyms: [task reliability, task success, pipeline success rate]
+  description: >
+    Share of task runs that completed successfully. SKIPPED runs are in the
+    denominator on purpose: a graph that is repeatedly suspended is not
+    delivering data, however healthy its individual statements look.
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: higher_is_better
+  thresholds: {warn: 0.98, critical: 0.95}
+  owner: platform
+  verified_queries: ["task success rate this week", "least reliable tasks"]
+
+- id: pipe.task_failures
+  name: Task failures
+  domain: pipeline
+  entity: fact_task_run
+  expression: SUM(CASE WHEN STATE = 'FAILED' THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [task, database, task_schema, error_class, graph_root]
+  synonyms: [failed tasks, task errors, pipeline failures]
+  description: >
+    Count of task runs that ended in FAILED. Sliced by error class this
+    separates the timeouts from the genuinely broken SQL, which want different
+    responses.
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["task failures yesterday", "failures by error code"]
+
+- id: pipe.task_duration_p95
+  name: p95 task duration
+  domain: pipeline
+  entity: fact_task_run
+  expression: MAX(CASE WHEN DURATION_PERCENT_RANK <= 0.95 THEN DURATION_SEC END)
+  format: {type: number, decimals: 0, unit: seconds}
+  grain: day
+  dimensions: [task, database, task_schema]
+  synonyms: [task runtime, slow tasks, task latency, p95 task time]
+  description: >
+    95th-percentile wall-clock duration from scheduled time to completion, per
+    task. Measured from *scheduled* rather than started time deliberately: a
+    task that waits ten minutes for a warehouse has been late by ten minutes,
+    whatever its statement timing says.
+
+    The percentile is taken from a nearest-rank window computed over the task's
+    retained history rather than through the PERCENTILE shim, because Snowflake
+    estimates percentiles from a t-digest and DuckDB computes them exactly — a
+    difference no task-duration tail has enough observations to absorb.
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["slowest tasks", "p95 task duration by schema"]
+
+- id: pipe.root_failures
+  name: Root task failures
+  domain: pipeline
+  entity: fact_task_run
+  expression: >
+    SUM(CASE WHEN STATE = 'FAILED' AND TASK_NAME = GRAPH_ROOT_TASK_ID
+             THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [task, graph_root, database, error_class]
+  synonyms: [root cause failures, dag root failures, upstream failures]
+  description: >
+    Failures at the root of a task graph — the incidents worth paging on. A root
+    failure suspends everything beneath it, so this count is what an alert
+    should carry while the downstream SKIPPED runs stay context rather than
+    separate notifications.
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 1, critical: 3}
+  owner: platform
+  verified_queries: ["root task failures", "which DAG root failed last night"]
+
+- id: pipe.repeat_failure_tasks
+  name: Repeat-failure tasks
+  domain: pipeline
+  entity: fact_task_run
+  expression: >
+    COUNT(DISTINCT CASE WHEN STATE = 'FAILED' AND TASK_FAILURE_COUNT > 1
+                        THEN TASK_NAME END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [database, task_schema, graph_root]
+  synonyms: [chronic failures, flaky tasks, repeatedly failing tasks]
+  description: >
+    Number of distinct tasks that have failed more than once over the retained
+    history. A single failure is an event; a second one is a defect, and this is
+    the count that should be shrinking rather than the raw failure total.
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["tasks that keep failing", "chronic task failures"]
+
+- id: pipe.skipped_downstream
+  name: Skipped downstream runs
+  domain: pipeline
+  entity: fact_task_run
+  expression: SUM(CASE WHEN STATE = 'SKIPPED' THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [task, graph_root, database, task_schema]
+  synonyms: [skipped tasks, suspended graph, downstream impact]
+  description: >
+    Runs skipped because something upstream failed. Read against
+    pipe.root_failures this is the blast radius of an incident: one root
+    failure, twelve tables that did not refresh.
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["how many tasks were skipped", "blast radius of last night's failure"]
+
+- id: pipe.dt_lag_vs_target
+  name: Dynamic table lag vs target
+  domain: pipeline
+  entity: fact_dynamic_table_refresh
+  expression: SAFE_RATIO(SUM(ACTUAL_LAG_SEC), SUM(TARGET_LAG_SEC))
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [dynamic_table, database, table_schema, refresh_action]
+  synonyms: [dynamic table lag, dt lag, target lag ratio, freshness vs target]
+  description: >
+    Actual lag as a fraction of declared TARGET_LAG. At or below 100% the table
+    is meeting the freshness contract it advertises; above it, downstream
+    consumers are reading data older than they were promised. Expressed as a
+    ratio rather than raw seconds so tables with different targets are
+    comparable on one axis.
+  requires_sources: [dynamic_table_refresh_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  thresholds: {warn: 0.8, critical: 1.0}
+  owner: platform
+  verified_queries: ["dynamic tables missing their target lag", "dt lag ratio this week"]
+
+- id: pipe.dt_lag_breaches
+  name: Dynamic table lag breaches
+  domain: pipeline
+  entity: fact_dynamic_table_refresh
+  expression: >
+    SUM(CASE WHEN TARGET_LAG_SEC IS NOT NULL AND ACTUAL_LAG_SEC > TARGET_LAG_SEC
+             THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [dynamic_table, database, table_schema, sla_status]
+  synonyms: [lag breaches, stale dynamic tables, target lag misses]
+  description: >
+    Refreshes that started against data older than the table's TARGET_LAG.
+    Refreshes with no declared target are excluded rather than counted as
+    passing — an unstated SLA is not a met one.
+  requires_sources: [dynamic_table_refresh_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["lag breaches by dynamic table", "which dynamic tables breached yesterday"]
+
+- id: pipe.dt_refresh_failures
+  name: Dynamic table refresh failures
+  domain: pipeline
+  entity: fact_dynamic_table_refresh
+  expression: SUM(CASE WHEN REFRESH_STATE <> 'SUCCEEDED' THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [dynamic_table, database, refresh_state, refresh_action]
+  synonyms: [dt failures, failed refreshes, dynamic table errors]
+  description: >
+    Refreshes that did not succeed, including UPSTREAM_FAILED — a dynamic table
+    whose source failed is just as stale as one that failed itself, and the
+    consumer cannot tell the difference.
+  requires_sources: [dynamic_table_refresh_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: platform
+
+- id: pipe.serverless_task_credits
+  name: Serverless task credits
+  domain: pipeline
+  entity: fact_serverless_daily
+  expression: SUM(CREDITS_USED)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [task, database, task_schema, usage_day]
+  synonyms: [serverless credits, serverless tasks, managed compute cost]
+  description: >
+    Credits consumed by tasks running on Snowflake-managed compute. These never
+    appear against a warehouse, so every warehouse-shaped cost view misses them
+    entirely — which is how serverless spend grows for months without anyone
+    noticing it in the warehouse leaderboard.
+  requires_sources: [serverless_task_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["serverless task credits this month", "most expensive serverless tasks"]

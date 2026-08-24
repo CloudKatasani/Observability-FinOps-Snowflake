@@ -40,6 +40,15 @@ class ReconciliationResponse(BaseModel):
     worst_days: list[dict[str, str | None]]
 
 
+class SqlDisclosure(BaseModel):
+    """One statement behind the allocation, and what it contributes (R5)."""
+
+    purpose: str
+    metrics: list[str]
+    dimensions: list[str]
+    sql: str
+
+
 class AllocationResponse(BaseModel):
     period_start: date
     period_end: date
@@ -51,8 +60,14 @@ class AllocationResponse(BaseModel):
     #: R6: chargeback figures are withheld when the gate is red.
     figures_published: bool
     as_of: datetime
+    #: §15 provenance. `provisional` is true whenever any input is still inside
+    #: its restatement window, so a caller is never told a figure is settled
+    #: because the allocation flattened three queries into one answer.
+    provisional: bool
     latency_floor_minutes: int
     sources: list[str]
+    #: R5: an allocation is three queries, and all three are shown.
+    sql: list[SqlDisclosure]
 
 
 @router.get("/allocation", response_model=AllocationResponse)

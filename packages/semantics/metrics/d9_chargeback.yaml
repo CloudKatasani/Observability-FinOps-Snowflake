@@ -1,0 +1,217 @@
+# D9 — Chargeback, budget & commitment (BUILD_PROMPT §9.2).
+#
+# Every figure in this domain declares an allocation_method, because a
+# chargeback number without one is unarguable-with: the recipient cannot tell
+# whether they are being billed for what they ran, for a share of idle time, or
+# for a rounding decision. The reconciliation pair
+# (chargeback.metered_credits vs chargeback.allocated_credits, with
+# chargeback.reconciliation_variance between them) is what R6 gates on: the
+# allocated total must reconcile to the metered total, and the residual must be
+# explainable as idle plus cloud services rather than as loss.
+#
+# Commitment balance (ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY) is not
+# modelled here yet: that view is not among the sources this deployment lands,
+# and a metric whose entity reads a view that does not exist fails at execution
+# rather than degrading. Add a fact_remaining_balance entity alongside the
+# source and the balance/runway metrics follow directly.
+- id: chargeback.allocated_credits
+  name: Allocated credits by team (direct)
+  domain: chargeback
+  entity: fact_query_execution
+  expression: SUM(CREDITS_ATTRIBUTED)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [team, warehouse, database, allocation_method]
+  synonyms: [chargeback, team allocation, showback, allocated cost]
+  description: >
+    Credits allocated to a team by its own query tags — the direct component of
+    the three-part model (direct + idle share + cloud-services share, HLD
+    §10.2). Read alone it under-states a team's true cost, because idle time and
+    cloud services are not attributable per query; it is the component that can
+    be defended query by query, which is why it is stated separately.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  allocation_method: direct
+  owner: finops
+  verified_queries: ["allocated credits by team", "chargeback for TEAM_DATA_ENG"]
+
+- id: chargeback.unattributed_credits
+  name: Unattributed credits
+  domain: chargeback
+  entity: fact_query_execution
+  expression: >
+    SUM(CASE WHEN QUERY_TAG_TEAM IS NULL THEN CREDITS_ATTRIBUTED ELSE 0 END)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [warehouse, database, user, query_type]
+  synonyms: [untagged credits, unallocated spend, residual pool]
+  description: >
+    Attributed credits carrying no team tag. This is the residual pool: it has
+    to be spread over the tagged teams pro-rata, which means every credit here
+    is a credit somebody is being charged for on an estimate rather than on
+    evidence. Sliced by warehouse and user it becomes a tagging backlog.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  allocation_method: residual_pool
+  owner: finops
+  verified_queries: ["unattributed credits by warehouse", "who is not tagging their queries"]
+
+- id: chargeback.unattributed_share
+  name: Unattributed share of allocation
+  domain: chargeback
+  entity: fact_query_execution
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN QUERY_TAG_TEAM IS NULL THEN CREDITS_ATTRIBUTED ELSE 0 END),
+      SUM(CREDITS_ATTRIBUTED)
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [warehouse, database, query_type]
+  synonyms: [allocation confidence, untagged percentage, estimate share]
+  description: >
+    Fraction of allocated credits that reached a team by estimate rather than by
+    tag. It is the confidence figure that belongs next to every chargeback
+    statement: at 5% the allocation is defensible, at 30% it is a negotiation.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  thresholds: {warn: 0.05, critical: 0.15}
+  allocation_method: residual_pool
+  owner: finops
+  verified_queries: ["how much of the allocation is estimated", "unattributed share by warehouse"]
+
+- id: chargeback.allocation_method_mix
+  name: Allocation method mix
+  domain: chargeback
+  entity: fact_query_execution
+  expression: COUNT(*)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [allocation_method, team, warehouse, database]
+  synonyms: [how was this allocated, method mix, tagged vs untagged queries]
+  description: >
+    Query count split by how the query's credits reach a team — DIRECT_TAG for
+    queries that carry a team tag, RESIDUAL_POOL for those that do not. It
+    answers "how was this number arrived at" in a single slice, which is the
+    question a team asks first when it disputes a bill.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: neutral
+  allocation_method: mixed
+  owner: finops
+  verified_queries: ["allocation method mix", "how many queries are tagged"]
+
+- id: chargeback.reconciliation_variance
+  name: Reconciliation variance (metered minus allocated)
+  domain: chargeback
+  entity: fact_warehouse_metering_hourly
+  expression: SUM(CREDITS_COMPUTE) - SUM(CREDITS_ATTRIBUTED)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [reconciliation gap, unallocated compute, allocation residual]
+  description: >
+    Metered warehouse compute minus the compute attributable to individual
+    queries. The gap is expected, not an error: QUERY_ATTRIBUTION_HISTORY
+    excludes idle time, queries under about 100 ms, and Adaptive Warehouse jobs
+    (ASSUMPTIONS §5). What the reconciliation gate checks is that the gap stays
+    explainable — a variance that grows without idle time growing means the
+    attribution view has stopped seeing part of the workload.
+  requires_sources: [warehouse_metering_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  allocation_method: idle_share
+  owner: finops
+  verified_queries: ["reconciliation variance by warehouse", "unallocated compute credits"]
+
+- id: chargeback.metered_credits
+  name: Metered credits (reconciliation control total)
+  domain: chargeback
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_USED)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [service_type, usage_day]
+  synonyms: [control total, metered total, what the account actually used]
+  description: >
+    The account's metered credits by service type — the control total every
+    allocation must sum back to. It is stated in this domain, rather than
+    borrowed from D1, because the reconciliation gate needs both sides of the
+    comparison to carry the same provenance and the same latency floor.
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  allocation_method: metered
+  owner: finops
+  verified_queries: ["metered credits by service type", "control total for reconciliation"]
+
+- id: chargeback.budget_variance_credits
+  name: Billed credits vs budget (monthly)
+  domain: chargeback
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_BILLED)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: month
+  dimensions: [service_type, usage_day]
+  synonyms: [budget, monthly budget, budget variance, are we over budget]
+  description: >
+    Billed credits at month grain, carrying the budget thresholds. Snowflake
+    publishes no budget object in ACCOUNT_USAGE, so the budget lives in the
+    thresholds below rather than in a joined table: the metric states the spend
+    and the configured limits state the expectation. Replace the thresholds per
+    deployment — they are a placeholder, not a recommendation.
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  thresholds: {warn: 40000, critical: 50000}
+  allocation_method: metered
+  owner: finops
+  verified_queries: ["billed credits this month", "are we over budget"]
+
+- id: chargeback.forecast_input_credits
+  name: Daily billed credits (forecast input)
+  domain: chargeback
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_BILLED)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [service_type, usage_day]
+  synonyms: [run rate, daily spend series, forecast, burn rate]
+  description: >
+    Billed credits per day — the series every forecast and run-rate projection
+    is fitted to. Kept as a raw daily total on purpose: the forecast belongs in
+    the analytics layer where its method and its error bars can be stated, not
+    inside a metric definition that would present an extrapolation with the same
+    authority as a measurement (R3).
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  allocation_method: metered
+  owner: finops
+  verified_queries: ["daily billed credits", "what is our run rate"]
+
+- id: chargeback.spend_by_account
+  name: Spend in currency by account
+  domain: chargeback
+  entity: fact_spend_currency_daily
+  expression: SUM(SPEND_IN_CURRENCY)
+  format: {type: currency, decimals: 2, unit: USD}
+  grain: day
+  dimensions: [account, usage_type, currency, usage_day]
+  synonyms: [spend by account, invoice, money by account, currency spend]
+  description: >
+    Spend in contract currency per account, from ORGANIZATION_USAGE. This is the
+    figure a finance system reconciles against, and the only one in the platform
+    denominated in money rather than credits. Values restate until month close,
+    so anything inside the 35-day window is flagged provisional and must not be
+    posted as final (R7, §9.3).
+  requires_sources: [usage_in_currency_daily]
+  latency_floor_minutes: 4320
+  direction: lower_is_better
+  provisional_window_days: 35
+  allocation_method: metered
+  owner: finops
+  verified_queries: ["spend by account this month", "which account costs the most"]

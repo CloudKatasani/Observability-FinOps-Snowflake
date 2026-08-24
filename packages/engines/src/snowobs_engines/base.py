@@ -30,6 +30,10 @@ class QueryResult:
     latency_floor_minutes: int
     provisional: bool
     row_count: int
+    #: The subset of `sources` whose latency gates this figure (R7). Narrower
+    #: than `sources` whenever an entity view joins a slower source for a
+    #: column the query never selects.
+    gating_sources: list[str] = field(default_factory=list)
     truncated: bool = False
     elapsed_ms: float = 0.0
     #: Credits this query itself consumed, when the engine can report it.

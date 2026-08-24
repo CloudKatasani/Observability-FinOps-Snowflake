@@ -1,0 +1,176 @@
+# D4 — Storage & data lifecycle (BUILD_PROMPT §9.2).
+#
+# Two entities carry this domain, and the split is deliberate. Anything with a
+# trend comes from fact_storage_daily (DATABASE_STORAGE_USAGE_HISTORY publishes
+# a daily average per database); anything that needs the *components* of a
+# table's bill comes from dim_table_storage, because TABLE_STORAGE_METRICS is
+# the only view that separates active, Time Travel, Fail-safe, and clone-
+# retained bytes — and it is a snapshot, not a history.
+- id: storage.active_bytes
+  name: Active storage
+  domain: storage
+  entity: fact_storage_daily
+  expression: SUM(ACTIVE_BYTES)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [database, usage_day]
+  synonyms: [storage, data volume, active bytes, database size]
+  description: >
+    Daily average bytes of live table data per database — the storage a query
+    can actually read. Snowflake averages over the day, so a table created and
+    dropped within one day shows as a fraction of its real size rather than not
+    at all.
+  requires_sources: [database_storage_usage_history, storage_usage]
+  latency_floor_minutes: 180
+  direction: neutral
+  owner: finops
+  verified_queries: ["storage by database", "how much data do we store"]
+
+- id: storage.time_travel_bytes
+  name: Time Travel storage
+  domain: storage
+  entity: dim_table_storage
+  expression: SUM(TIME_TRAVEL_BYTES)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [database, table_schema, table, retention_policy]
+  synonyms: [time travel, retention storage, historical versions]
+  description: >
+    Bytes held to satisfy Time Travel retention. This is billed storage that no
+    query reads in normal operation; it is insurance, and the premium is set by
+    DATA_RETENTION_TIME_IN_DAYS on each table.
+  requires_sources: [table_storage_metrics]
+  latency_floor_minutes: 90
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["time travel storage by database", "which tables hold the most history"]
+
+- id: storage.failsafe_bytes
+  name: Fail-safe storage
+  domain: storage
+  entity: fact_storage_daily
+  expression: SUM(FAILSAFE_BYTES)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [database, usage_day]
+  synonyms: [failsafe, fail-safe, disaster recovery storage]
+  description: >
+    Daily average Fail-safe bytes per database — the seven-day, non-configurable
+    window Snowflake keeps after Time Travel expires. It cannot be shortened or
+    disabled, so the only lever on this figure is writing less churn; transient
+    and temporary tables have no Fail-safe at all.
+  requires_sources: [database_storage_usage_history, storage_usage]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+
+- id: storage.clone_retained_bytes
+  name: Clone-retained storage
+  domain: storage
+  entity: dim_table_storage
+  expression: SUM(RETAINED_FOR_CLONE_BYTES)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [database, table_schema, table, clone_group]
+  synonyms: [clone storage, retained for clone, zero copy clone cost]
+  description: >
+    Bytes a table keeps alive solely because a clone still references them.
+    Zero-copy cloning is free at creation and stops being free the moment either
+    side diverges; an un-dropped clone of a large table is one of the few ways
+    storage grows with nobody having written anything.
+  requires_sources: [table_storage_metrics]
+  latency_floor_minutes: 90
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["clone storage by table", "which clones are costing us"]
+
+- id: storage.growth_rate
+  name: Storage growth rate
+  domain: storage
+  entity: fact_storage_daily
+  expression: >
+    SAFE_RATIO(
+      SUM(ACTIVE_BYTES - COALESCE(ACTIVE_BYTES_PRIOR_DAY, ACTIVE_BYTES)),
+      SUM(COALESCE(ACTIVE_BYTES_PRIOR_DAY, ACTIVE_BYTES))
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [database, usage_day]
+  synonyms: [storage growth, data growth, growth by database]
+  description: >
+    Day-over-day change in active bytes, per database. The prior day's figure
+    travels on each row, so this is a single-pass aggregate rather than a
+    self-join; a database's first observed day compares against itself and
+    therefore contributes zero growth rather than an infinite one.
+  requires_sources: [database_storage_usage_history, storage_usage]
+  latency_floor_minutes: 180
+  direction: neutral
+  thresholds: {warn: 0.02, critical: 0.05}
+  owner: finops
+  verified_queries: ["fastest growing databases", "storage growth last 30 days"]
+
+- id: storage.stale_table_bytes
+  name: Stale table storage
+  domain: storage
+  entity: dim_table_storage
+  expression: SUM(CASE WHEN DAYS_SINCE_LAST_CHANGE >= 90 THEN TOTAL_BYTES ELSE 0 END)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [database, table_schema, table, is_transient]
+  synonyms: [stale tables, abandoned tables, unused storage, cold data]
+  description: >
+    Total bytes held by tables with no recorded change in 90 days — the
+    candidates for archival or deletion. TABLE_STORAGE_METRICS carries no
+    LAST_ALTERED (that column belongs to ACCOUNT_USAGE.TABLES), so the age is
+    measured from the newest change stamp the storage snapshot does publish.
+    That makes this a lower bound: every table it names is stale, but a table it
+    passes over may still be.
+  requires_sources: [table_storage_metrics]
+  latency_floor_minutes: 90
+  direction: lower_is_better
+  owner: finops
+  notes: >
+    Land ACCOUNT_USAGE.TABLES and re-source the age from LAST_ALTERED to make
+    this exact rather than conservative.
+  verified_queries: ["stale tables", "which tables have not changed in 90 days"]
+
+- id: storage.time_travel_ratio
+  name: Time Travel ratio
+  domain: storage
+  entity: dim_table_storage
+  expression: SAFE_RATIO(SUM(TIME_TRAVEL_BYTES), SUM(ACTIVE_BYTES))
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [database, table_schema, retention_policy, is_transient]
+  synonyms: [time travel percentage, retention compliance, time travel vs active]
+  description: >
+    Time Travel bytes as a fraction of live data. The policy is that non-prod
+    databases carry at most 10%: a ratio far above that means either a long
+    retention setting on a high-churn table or a full rewrite where a merge
+    would do. Both are fixable without touching the data itself.
+  requires_sources: [table_storage_metrics]
+  latency_floor_minutes: 90
+  direction: lower_is_better
+  thresholds: {warn: 0.10, critical: 0.25}
+  owner: finops
+  verified_queries: ["time travel ratio by database", "which databases breach the retention policy"]
+
+- id: storage.top_tables_bytes
+  name: Table storage (all components)
+  domain: storage
+  entity: dim_table_storage
+  expression: SUM(TOTAL_BYTES)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [table, database, table_schema, is_transient, retention_policy]
+  synonyms: [biggest tables, top tables by storage, table size ranking]
+  description: >
+    Active plus Time Travel plus Fail-safe plus clone-retained bytes per table —
+    the whole of what a table costs, not just what it holds. Ranked descending
+    this is the storage optimisation backlog, and the four components tell you
+    which lever to pull on each row.
+  requires_sources: [table_storage_metrics]
+  latency_floor_minutes: 90
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["largest tables by total storage", "top 20 tables by storage"]

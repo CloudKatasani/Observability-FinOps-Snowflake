@@ -1,0 +1,49 @@
+id: fact_login
+name: Login attempt
+kind: fact
+description: >
+  One row per authentication attempt from LOGIN_HISTORY, successful or not.
+  IS_SUCCESS is Snowflake's YES/NO text and is kept verbatim rather than
+  coerced, so a null (an event type that reports neither) stays distinguishable
+  from a failure. SECOND_AUTHENTICATION_FACTOR is empty for single-factor
+  logins — the signal behind the MFA-rollout readiness metrics.
+sources: [login_history]
+grain: [EVENT_ID]
+time_column: EVENT_AT
+sql: |
+  SELECT
+    "EVENT_ID"                                            AS EVENT_ID,
+    TS_PARSE("EVENT_TIMESTAMP")                           AS EVENT_AT,
+    "EVENT_TYPE"                                          AS EVENT_TYPE,
+    "USER_NAME"                                           AS USER_NAME,
+    "CLIENT_IP"                                           AS CLIENT_IP,
+    "REPORTED_CLIENT_TYPE"                                AS CLIENT_TYPE,
+    "REPORTED_CLIENT_VERSION"                             AS CLIENT_VERSION,
+    "FIRST_AUTHENTICATION_FACTOR"                         AS FIRST_AUTH_FACTOR,
+    "SECOND_AUTHENTICATION_FACTOR"                        AS SECOND_AUTH_FACTOR,
+    "IS_SUCCESS"                                          AS IS_SUCCESS,
+    "ERROR_CODE"                                          AS ERROR_CODE,
+    "ERROR_MESSAGE"                                       AS ERROR_MESSAGE
+  FROM login_history
+dimensions:
+  - name: user
+    expression: USER_NAME
+    description: User the attempt was made against.
+  - name: client_type
+    expression: COALESCE(CLIENT_TYPE, 'UNKNOWN')
+    description: Reported driver or client (JDBC, PYTHON_DRIVER, SNOWFLAKE_UI, …).
+  - name: first_factor
+    expression: COALESCE(FIRST_AUTH_FACTOR, 'UNKNOWN')
+    description: First authentication factor (PASSWORD, RSA_KEYPAIR, OAUTH, …).
+  - name: second_factor
+    expression: COALESCE(SECOND_AUTH_FACTOR, 'NONE')
+    description: Second factor, or NONE for a single-factor login.
+  - name: login_outcome
+    expression: COALESCE(IS_SUCCESS, 'UNKNOWN')
+    description: YES or NO, as reported by the view.
+  - name: error_class
+    expression: COALESCE(ERROR_CODE, 'NONE')
+    description: Snowflake error code of a failed attempt, or NONE.
+  - name: client_ip
+    expression: COALESCE(CLIENT_IP, 'UNKNOWN')
+    description: Source IP of the attempt.

@@ -195,7 +195,7 @@
   format: {type: percent, decimals: 2}
   grain: day
   dimensions: [warehouse, warehouse_size]
-  synonyms: [spilling queries, memory pressure]
+  synonyms: [spilling queries, queries spill, queries spilling, memory pressure]
   description: >
     Fraction of queries spilling to storage — the signal that a warehouse is
     under-sized for its workload, as opposed to merely busy.

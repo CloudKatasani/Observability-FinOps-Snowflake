@@ -1,0 +1,172 @@
+# D6 — Data quality & freshness (BUILD_PROMPT §9.2).
+#
+# ACCOUNT_USAGE publishes no data-quality view: there is no landed row count, no
+# constraint violation log, no quarantine table. Everything here is therefore
+# built from operational evidence, and each metric says plainly what it is a
+# proxy *for* — a proxy presented as a measurement is worse than no metric at
+# all (R3). The last metric turns the same lens on this platform itself.
+- id: dq.minutes_since_task_success
+  name: Minutes since last successful task run
+  domain: quality
+  entity: fact_task_run
+  expression: SAFE_RATIO(MAX(SECONDS_SINCE_LAST_SUCCESS), 60)
+  format: {type: number, decimals: 0, unit: minutes}
+  grain: day
+  dimensions: [task, database, task_schema, graph_root]
+  synonyms: [task freshness, staleness, time since last success, last good run]
+  description: >
+    Age of a task's most recent SUCCEEDED run, measured against the newest
+    scheduled run observed anywhere in the data rather than wall-clock time —
+    so the number is reproducible and never blames the reader's clock for a
+    stale extract. A task that has never succeeded returns null, not a large
+    number: unknown staleness stays unknown (R3).
+  requires_sources: [task_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 1440, critical: 2880}
+  owner: platform
+  verified_queries: ["which tables are stale", "tasks with no successful run today"]
+
+- id: dq.freshness_sla_attainment
+  name: Freshness SLA attainment
+  domain: quality
+  entity: fact_dynamic_table_refresh
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN TARGET_LAG_SEC IS NOT NULL AND ACTUAL_LAG_SEC <= TARGET_LAG_SEC
+               THEN 1 ELSE 0 END),
+      SUM(CASE WHEN TARGET_LAG_SEC IS NOT NULL THEN 1 ELSE 0 END)
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [dynamic_table, database, table_schema, sla_status]
+  synonyms: [freshness sla, sla attainment, on-time refreshes, freshness compliance]
+  description: >
+    Share of dynamic-table refreshes that met the table's own declared
+    TARGET_LAG. Refreshes on tables with no target are excluded from both sides
+    of the ratio rather than counted as successes — this measures attainment
+    against stated SLAs, not the absence of one.
+  requires_sources: [dynamic_table_refresh_history]
+  latency_floor_minutes: 180
+  direction: higher_is_better
+  thresholds: {warn: 0.99, critical: 0.95}
+  owner: platform
+  verified_queries: ["freshness SLA attainment this month", "which tables miss their SLA"]
+
+- id: dq.sla_breach_count
+  name: Freshness SLA breaches
+  domain: quality
+  entity: fact_dynamic_table_refresh
+  expression: >
+    SUM(CASE WHEN TARGET_LAG_SEC IS NOT NULL AND ACTUAL_LAG_SEC > TARGET_LAG_SEC
+             THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [dynamic_table, database, table_schema]
+  synonyms: [sla breaches, missed freshness, breach count]
+  description: >
+    Number of refreshes that missed their declared target lag. Counted per
+    refresh rather than per table so a table that breaches every hour is visibly
+    worse than one that breached once.
+  requires_sources: [dynamic_table_refresh_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: platform
+
+- id: dq.sla_breach_seconds
+  name: Freshness SLA breach duration
+  domain: quality
+  entity: fact_dynamic_table_refresh
+  expression: >
+    SUM(CASE WHEN TARGET_LAG_SEC IS NOT NULL AND ACTUAL_LAG_SEC > TARGET_LAG_SEC
+             THEN ACTUAL_LAG_SEC - TARGET_LAG_SEC ELSE 0 END)
+  format: {type: number, decimals: 0, unit: seconds}
+  grain: day
+  dimensions: [dynamic_table, database, table_schema]
+  synonyms: [breach severity, how late, seconds over target, lag excess]
+  description: >
+    Total seconds by which refreshes overran their target lag. Severity, not
+    frequency: one table four hours late and one table four seconds late both
+    register as a single breach, and only this metric tells them apart.
+  requires_sources: [dynamic_table_refresh_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["worst freshness breaches by duration"]
+
+- id: dq.schema_drift_events
+  name: Schema drift events
+  domain: quality
+  entity: fact_query_execution
+  expression: >
+    COUNT(DISTINCT CASE WHEN COALESCE(ERROR_CODE, '') = '000904'
+                        THEN COALESCE(DATABASE_NAME, 'UNKNOWN') END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [database, warehouse, team, user]
+  synonyms: [schema drift, column changes, invalid identifier, breaking changes]
+  description: >
+    Distinct sources in which a query failed with SQL compilation error 000904,
+    "invalid identifier" — the error a query gets when a column it was written
+    against has been renamed, retyped, or removed. This is a proxy for schema
+    drift, not a registry diff: it fires when drift has already broken
+    something, and stays silent about additive drift that has broken nothing
+    yet. Counted per source rather than per query so one changed column in a
+    dashboard refreshed hourly is one event.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 1, critical: 3}
+  owner: platform
+  verified_queries: ["schema drift this week", "which databases have breaking column changes"]
+
+- id: dq.quarantine_rate
+  name: Quarantine rate (query error proxy)
+  domain: quality
+  entity: fact_query_execution
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN EXECUTION_STATUS <> 'SUCCESS' THEN 1 ELSE 0 END),
+      COUNT(*)
+    )
+  format: {type: percent, decimals: 3}
+  grain: day
+  dimensions: [error_class, database, warehouse, team]
+  synonyms: [quarantined rows, rejected data, bad records, error rate by class]
+  description: >
+    Share of statements that did not complete, sliced by error class. Snowflake
+    publishes no quarantine or reject-row count, so this stands in for one: a
+    load or transform that rejects data usually fails the statement, and the
+    error class says which kind of badness it was. It is a rate of failed
+    *operations*, not of failed rows — a distinction worth keeping in front of
+    anyone reading it as a data-quality figure.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 0.02, critical: 0.05}
+  owner: platform
+  verified_queries: ["error rate by error class", "which error classes dominate failures"]
+
+- id: dq.pipeline_freshness_minutes
+  name: Observability pipeline freshness
+  domain: quality
+  entity: fact_query_execution
+  expression: SAFE_RATIO(EPOCH_SECONDS(MAX(STARTED_AT), MAX(LANDED_AT)), 60)
+  format: {type: number, decimals: 0, unit: minutes}
+  grain: day
+  dimensions: [warehouse, team, database]
+  synonyms: [our own freshness, ingestion lag, pipeline lag, data age]
+  description: >
+    Age of the newest QUERY_HISTORY row at the moment it landed — how far behind
+    the account this platform's own copy of the data was. It is the number the
+    freshness banner is built on, and the one that decides whether a figure is
+    allowed to be shown at all. A platform that reports on everyone else's
+    staleness has no standing to hide its own; the floor is what ACCOUNT_USAGE
+    documents (45 minutes for QUERY_HISTORY), anything above it is this
+    platform's own doing.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 90, critical: 180}
+  owner: platform
+  verified_queries: ["how fresh is this data", "observability pipeline lag"]

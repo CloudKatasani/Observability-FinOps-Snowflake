@@ -1,0 +1,57 @@
+id: fact_ai_usage_daily
+name: Cortex AI usage (daily)
+kind: fact
+description: >
+  Cortex function usage rolled to one row per function, model, and day from
+  CORTEX_FUNCTIONS_USAGE_HISTORY. Tokens and token credits are the two figures
+  that matter: credits are what the bill charges, tokens are what the workload
+  actually did, and the ratio between them is how a model swap shows up before
+  anyone announces it.
+
+  The account's total metered credits for the same day ride along as
+  ACCOUNT_CREDITS_DAY (one value per day, repeated on every row of that day) so
+  AI's share of the bill can be stated without a cross-entity join. It is a
+  per-day constant, so metrics read it with MAX at day grain — never SUM, which
+  would multiply it by the number of function/model pairs.
+sources: [cortex_functions_usage_history, metering_daily_history]
+grain: [FUNCTION_NAME, MODEL_NAME, USAGE_DAY]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    u.FUNCTION_NAME                                       AS FUNCTION_NAME,
+    u.MODEL_NAME                                          AS MODEL_NAME,
+    u.USAGE_DAY                                           AS USAGE_DAY,
+    u.TOKENS                                              AS TOKENS,
+    MONEY(u.TOKEN_CREDITS)                                AS TOKEN_CREDITS,
+    u.CALL_COUNT                                          AS CALL_COUNT,
+    MONEY(COALESCE(m.ACCOUNT_CREDITS, 0))                 AS ACCOUNT_CREDITS_DAY
+  FROM (
+    SELECT
+      "FUNCTION_NAME"                                     AS FUNCTION_NAME,
+      "MODEL_NAME"                                        AS MODEL_NAME,
+      CAST(TS_TRUNC('day', TS_PARSE("START_TIME")) AS DATE)
+                                                          AS USAGE_DAY,
+      SUM("TOKENS")                                       AS TOKENS,
+      MONEY(SUM("TOKEN_CREDITS"))                         AS TOKEN_CREDITS,
+      COUNT(*)                                            AS CALL_COUNT
+    FROM cortex_functions_usage_history
+    GROUP BY 1, 2, 3
+  ) AS u
+  LEFT JOIN (
+    SELECT
+      CAST("USAGE_DATE" AS DATE)                          AS USAGE_DAY,
+      MONEY(SUM("CREDITS_USED"))                          AS ACCOUNT_CREDITS
+    FROM metering_daily_history
+    GROUP BY 1
+  ) AS m
+    ON m.USAGE_DAY = u.USAGE_DAY
+dimensions:
+  - name: ai_function
+    expression: FUNCTION_NAME
+    description: Cortex function called (COMPLETE, SUMMARIZE, EMBED_TEXT_768, …).
+  - name: ai_model
+    expression: MODEL_NAME
+    description: Model the function ran against.
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date.

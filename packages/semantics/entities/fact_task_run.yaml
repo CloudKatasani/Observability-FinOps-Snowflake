@@ -1,0 +1,77 @@
+id: fact_task_run
+name: Task run
+kind: fact
+description: >
+  One row per scheduled task run from TASK_HISTORY, with the DAG columns that
+  turn twelve alerts into one: a run whose NAME equals its GRAPH_ROOT_TASK_ID is
+  the root, and the SKIPPED children beneath a failed root are consequences, not
+  incidents.
+
+  Three window columns are computed over the whole retained history rather than
+  the requested window, so the metrics that need them stay single-pass and
+  fan-out safe: TASK_FAILURE_COUNT (repeat offenders), LAST_SUCCESS_AT and
+  SECONDS_SINCE_LAST_SUCCESS (freshness per task, measured against the newest
+  scheduled run observed anywhere in the data rather than wall-clock, so the
+  figure is reproducible), and DURATION_PERCENT_RANK.
+
+  DURATION_PERCENT_RANK exists so the p95 can be taken with a portable window
+  function instead of the PERCENTILE shim: Snowflake estimates percentiles from
+  a t-digest and DuckDB computes them exactly, and a task-duration tail is far
+  too sparse for that difference to be acceptable.
+sources: [task_history]
+grain: [TASK_NAME, SCHEDULED_AT]
+time_column: SCHEDULED_AT
+sql: |
+  SELECT
+    "NAME"                                                AS TASK_NAME,
+    "DATABASE_NAME"                                       AS DATABASE_NAME,
+    "SCHEMA_NAME"                                         AS SCHEMA_NAME,
+    "STATE"                                               AS STATE,
+    "ERROR_CODE"                                          AS ERROR_CODE,
+    "QUERY_ID"                                            AS QUERY_ID,
+    "GRAPH_ROOT_TASK_ID"                                  AS GRAPH_ROOT_TASK_ID,
+    "GRAPH_RUN_GROUP_ID"                                  AS GRAPH_RUN_GROUP_ID,
+    "RUN_ID"                                              AS RUN_ID,
+    TS_PARSE("SCHEDULED_TIME")                            AS SCHEDULED_AT,
+    TS_PARSE("QUERY_START_TIME")                          AS STARTED_AT,
+    TS_PARSE("COMPLETED_TIME")                            AS COMPLETED_AT,
+    EPOCH_SECONDS(TS_PARSE("SCHEDULED_TIME"), TS_PARSE("COMPLETED_TIME"))
+                                                          AS DURATION_SEC,
+    PERCENT_RANK() OVER (
+      PARTITION BY "NAME"
+      ORDER BY EPOCH_SECONDS(TS_PARSE("SCHEDULED_TIME"), TS_PARSE("COMPLETED_TIME"))
+    )                                                     AS DURATION_PERCENT_RANK,
+    SUM(CASE WHEN "STATE" = 'FAILED' THEN 1 ELSE 0 END) OVER (PARTITION BY "NAME")
+                                                          AS TASK_FAILURE_COUNT,
+    MAX(CASE WHEN "STATE" = 'SUCCEEDED' THEN TS_PARSE("COMPLETED_TIME") END)
+      OVER (PARTITION BY "NAME")                          AS LAST_SUCCESS_AT,
+    MAX(TS_PARSE("SCHEDULED_TIME")) OVER ()               AS OBSERVED_THROUGH_AT,
+    EPOCH_SECONDS(
+      MAX(CASE WHEN "STATE" = 'SUCCEEDED' THEN TS_PARSE("COMPLETED_TIME") END)
+        OVER (PARTITION BY "NAME"),
+      MAX(TS_PARSE("SCHEDULED_TIME")) OVER ()
+    )                                                     AS SECONDS_SINCE_LAST_SUCCESS
+  FROM task_history
+dimensions:
+  - name: task
+    expression: TASK_NAME
+    description: Task name.
+  - name: database
+    expression: DATABASE_NAME
+    description: Database the task is defined in.
+  - name: task_schema
+    expression: SCHEMA_NAME
+    description: Schema the task is defined in.
+  - name: task_state
+    expression: STATE
+    description: SUCCEEDED, FAILED, SKIPPED, CANCELLED, or SCHEDULED.
+  - name: error_class
+    expression: COALESCE(ERROR_CODE, 'NONE')
+    description: Snowflake error code of the run, or NONE when it succeeded.
+  - name: graph_root
+    expression: COALESCE(GRAPH_ROOT_TASK_ID, TASK_NAME)
+    description: Root task of the DAG the run belongs to — the roll-up key.
+  - name: graph_position
+    expression: >
+      CASE WHEN TASK_NAME = GRAPH_ROOT_TASK_ID THEN 'ROOT' ELSE 'DOWNSTREAM' END
+    description: Whether the run is the DAG root or a downstream child.

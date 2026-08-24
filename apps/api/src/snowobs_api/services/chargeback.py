@@ -23,16 +23,47 @@ from snowobs_finops.allocation import (
 )
 from snowobs_finops.reconciliation import ReconciliationRun, reconcile
 from snowobs_ingest.catalog import DuckDBCatalog
-from snowobs_semantics.compiler import MetricRequest, SemanticCompiler, TimeRange
+from snowobs_semantics.compiler import (
+    CompiledQuery,
+    MetricRequest,
+    SemanticCompiler,
+    TimeRange,
+)
 from snowobs_semantics.dialect_shims import Dialect
 from snowobs_semantics.model import TimeGrain
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from snowobs_api.routers.chargeback import AllocationResponse, ReconciliationResponse
+    from snowobs_api.routers.chargeback import (
+        AllocationResponse,
+        ReconciliationResponse,
+        SqlDisclosure,
+    )
 
 #: Sources the chargeback engine cannot work without.
 REQUIRED_SOURCES = ("warehouse_metering_history", "query_attribution_history")
 CENTS = Decimal("0.01")
+
+#: What each compiled query contributes to the allocation, so "show the SQL"
+#: reads as an explanation rather than as a stack of anonymous statements.
+#: Keyed by (metric, is-it-sliced), because the same metric is run twice for
+#: two different jobs: per warehouse-day to drive the waterfall, and as an
+#: account total for the gate to reconcile against. Labelling both the same
+#: would make the response look like it repeated itself.
+_SQL_PURPOSES = {
+    ("cost.by_warehouse_credits", True): (
+        "Metered credits per warehouse-day — the pool each warehouse's cost is allocated from."
+    ),
+    ("cost.by_warehouse_credits", False): (
+        "Metered credits per day for the whole account — the billed figure the "
+        "reconciliation gate checks the allocation against (R6)."
+    ),
+    ("cost.by_team_credits", True): (
+        "Attributed credits per team — the direct component of the waterfall."
+    ),
+    ("cost.cloud_services_credits", False): (
+        "Daily billed cloud services — apportioned across teams by their compute share."
+    ),
+}
 
 
 class ChargebackService:
@@ -40,6 +71,10 @@ class ChargebackService:
         self.settings = settings
         self.tenant = tenant
         self.compiler = SemanticCompiler()
+        #: Every query this run compiled, so the response can show its own SQL
+        #: (R5) and derive provenance from what actually ran rather than from a
+        #: constant written next to the response model.
+        self._compiled: list[CompiledQuery] = []
 
     def _catalog(self) -> DuckDBCatalog:
         from snowobs_api.services.datasets import storage_root
@@ -131,13 +166,44 @@ class ChargebackService:
     def _execute(self, catalog: DuckDBCatalog, request: MetricRequest) -> list[dict[str, Any]]:
         from snowobs_engines.duckdb_engine import DuckDBEngine
 
+        compiled = self.compiler.compile(request, Dialect.DUCKDB)
+        self._compiled.append(compiled)
         engine = DuckDBEngine(catalog)
-        result = engine.execute(self.compiler.compile(request, Dialect.DUCKDB))
+        result = engine.execute(compiled)
         return result.dicts()
+
+    # ------------------------------------------------------------ provenance
+    def _provenance(self) -> tuple[bool, int, list[str], list[SqlDisclosure]]:
+        """Provenance for the whole allocation, taken from the queries that ran.
+
+        An allocation is a composite of three metric queries, so each field is
+        the *least favourable* of its parts: provisional if any input is still
+        restating, and floored at the slowest source. Reporting anything better
+        would overstate how settled the chargeback is.
+        """
+        from snowobs_api.routers.chargeback import SqlDisclosure
+
+        provisional = any(query.provisional for query in self._compiled)
+        latency_floor = max((query.latency_floor_minutes for query in self._compiled), default=0)
+        sources = sorted({source for query in self._compiled for source in query.gating_sources})
+        disclosures = [
+            SqlDisclosure(
+                purpose=_SQL_PURPOSES.get(
+                    (query.metrics[0] if query.metrics else "", bool(query.dimensions)),
+                    "Supporting query for the allocation.",
+                ),
+                metrics=list(query.metrics),
+                dimensions=list(query.dimensions),
+                sql=query.sql,
+            )
+            for query in self._compiled
+        ]
+        return provisional, latency_floor, sources, disclosures
 
     # --------------------------------------------------------------- results
     def allocate(self, start: date, end: date) -> tuple[AllocationResult, ReconciliationRun]:
         catalog = self._catalog()
+        self._compiled.clear()
         try:
             engine = AllocationEngine(registry=self._registry())
             allocation = engine.allocate(
@@ -169,6 +235,7 @@ class ChargebackService:
         from snowobs_api.routers.chargeback import AllocationResponse, TeamCost
 
         allocation, run = self.allocate(start, end)
+        provisional, latency_floor, sources, disclosures = self._provenance()
         price = self.settings.finops.credit_price_usd
         totals = allocation.by_team()
         grand_total = sum(totals.values(), Decimal(0))
@@ -212,8 +279,10 @@ class ChargebackService:
             reconciliation=self._to_response(run),
             figures_published=run.publication_allowed,
             as_of=datetime.now(tz=UTC),
-            latency_floor_minutes=480,  # QUERY_ATTRIBUTION_HISTORY is the floor
-            sources=[*REQUIRED_SOURCES, "metering_daily_history"],
+            provisional=provisional,
+            latency_floor_minutes=latency_floor,
+            sources=sources,
+            sql=disclosures,
         )
 
     def reconciliation_response(self, start: date, end: date) -> ReconciliationResponse:

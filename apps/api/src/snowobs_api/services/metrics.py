@@ -38,6 +38,8 @@ class MetricValue:
     latency_floor_minutes: int
     provisional: bool
     sources: list[str]
+    #: The subset of `sources` whose latency actually gates this figure (R7).
+    gating_sources: list[str]
     sql: str
     allocation_method: str | None = None
     #: Set when the metric cannot be computed — R3: say why, never show zero.
@@ -55,6 +57,7 @@ class MetricSeries:
     latency_floor_minutes: int
     provisional: bool
     sources: list[str]
+    gating_sources: list[str]
     sql: str
     truncated: bool
     row_count: int
@@ -108,6 +111,7 @@ class MetricService:
                 latency_floor_minutes=result.latency_floor_minutes,
                 provisional=result.provisional,
                 sources=result.sources,
+                gating_sources=result.gating_sources,
                 sql=result.executed_sql,
                 truncated=result.truncated,
                 row_count=result.row_count,
@@ -137,6 +141,7 @@ class MetricService:
                     latency_floor_minutes=metric.latency_floor_minutes,
                     provisional=False,
                     sources=list(metric.requires_sources),
+                    gating_sources=list(metric.requires_sources),
                     sql="",
                     allocation_method=metric.allocation_method,
                     unavailable_reason=("Unavailable — requires " + ", ".join(sorted(missing))),
@@ -156,6 +161,7 @@ class MetricService:
                 latency_floor_minutes=result.latency_floor_minutes,
                 provisional=result.provisional,
                 sources=result.sources,
+                gating_sources=result.gating_sources,
                 sql=result.executed_sql,
                 allocation_method=metric.allocation_method,
             )
