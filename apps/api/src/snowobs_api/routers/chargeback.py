@@ -6,7 +6,6 @@ chargeback without also seeing whether it reconciles.
 """
 
 from datetime import date, datetime
-from decimal import Decimal
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -84,7 +83,3 @@ async def allocation(
 async def reconciliation(settings: SettingsDep, usage_date: date) -> ReconciliationResponse:
     """The stored reconciliation for one day — the artifact finance asks for."""
     return ChargebackService(settings).reconciliation_response(usage_date, usage_date)
-
-
-def _decimal(value: Decimal | None) -> str | None:
-    return str(value) if value is not None else None

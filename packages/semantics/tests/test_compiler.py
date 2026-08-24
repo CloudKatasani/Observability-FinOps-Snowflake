@@ -89,6 +89,29 @@ def test_column_provenance_separates_a_view_s_fast_and_slow_sources() -> None:
     }
 
 
+def test_reported_columns_match_the_aliases_the_sql_emits(compiler: SemanticCompiler) -> None:
+    """`columns` is a contract about the result set, so it must describe it.
+
+    Dimensions were reported in the request's casing while the SQL aliased them
+    uppercase, so a caller matching a returned column against this list matched
+    nothing and had no error to go on.
+    """
+    import re
+
+    compiled = compiler.compile(
+        MetricRequest(
+            metrics=["cost.by_warehouse_credits"],
+            dimensions=["warehouse"],
+            limit=5,
+        ),
+        Dialect.DUCKDB,
+    )
+    assert compiled.columns == ["TIME_BUCKET", "WAREHOUSE", "COST_BY_WAREHOUSE_CREDITS"]
+    # Every reported column is genuinely an alias in the emitted statement.
+    aliased = set(re.findall(r'AS "([A-Z_]+)"', compiled.sql))
+    assert set(compiled.columns) <= aliased
+
+
 def test_gating_sources_are_narrower_than_sources_used(compiler: SemanticCompiler) -> None:
     """A query that never selects the slow column must not be reported as slow."""
     compiled = compiler.compile(MetricRequest(metrics=["q.volume"]), Dialect.DUCKDB)

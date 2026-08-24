@@ -23,6 +23,7 @@ from typing import Any
 from snowobs_common.logging import get_logger
 from snowobs_ingest.mapper import MappingStatus, SourceMapping, identify
 from snowobs_ingest.profiler import FileFormat, FileProfile, profile_file
+from snowobs_ingest.tenancy import tenant_root, validate_tenant
 from snowobs_ingest.validator import QualityReport, RowValidator
 from snowobs_semantics.registry import ColumnType, SourceRegistry, default_registry
 
@@ -168,10 +169,12 @@ class LakeWriter:
 
     def __init__(self, storage_root: Path, tenant: str = "default") -> None:
         self.storage_root = storage_root
-        self.tenant = tenant
+        # The write side needs the same guard as the read side: a traversal
+        # here would land one customer's extract inside another's prefix.
+        self.tenant = validate_tenant(tenant)
 
     def path_for(self, source_id: str, batch_id: str) -> Path:
-        return self.storage_root / self.tenant / source_id / f"part-{batch_id}.parquet"
+        return tenant_root(self.storage_root, self.tenant) / source_id / f"part-{batch_id}.parquet"
 
     def write(
         self,

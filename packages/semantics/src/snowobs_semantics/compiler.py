@@ -434,7 +434,12 @@ class SemanticCompiler:
             if request.bucket_time and any(self.model.entity(e).time_column for e in entity_ids)
             else []
         )
-        columns += list(request.dimensions)
+        # Uppercased to match the aliases the SQL actually emits. Callers pass
+        # dimension names in lowercase and the compiler aliases them
+        # `AS "WAREHOUSE"`, so reporting the request's casing here made
+        # `columns` disagree with the result set — and a caller matching a
+        # response column against this list found nothing, silently.
+        columns += [dimension.upper() for dimension in request.dimensions]
         columns += [m.id.replace(".", "_").upper() for m in metrics]
         fingerprint = hashlib.sha256(f"{dialect.value}|{sql}".encode()).hexdigest()[:32]
         return CompiledQuery(

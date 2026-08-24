@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from snowobs_common.errors import AppError
 from snowobs_common.logging import get_logger
+from snowobs_ingest.tenancy import tenant_root, validate_tenant
 from snowobs_semantics.registry import SourceRegistry, default_registry
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -85,7 +86,10 @@ class DuckDBCatalog:
 
         self.storage_root = storage_root
         self.registry = registry or default_registry()
-        self.tenant = tenant
+        # Validated here rather than at every join: the tenant id becomes a
+        # directory name, and `acme/../globex` reads another customer's data
+        # without erroring (§17).
+        self.tenant = validate_tenant(tenant)
         self.connection: duckdb.DuckDBPyConnection = duckdb.connect(str(database))
         self.connection.execute("SET TimeZone='UTC'")
 
@@ -100,7 +104,7 @@ class DuckDBCatalog:
 
     # ------------------------------------------------------------- discovery
     def parts_for(self, source_id: str) -> list[Path]:
-        directory = self.storage_root / self.tenant / source_id
+        directory = tenant_root(self.storage_root, self.tenant) / source_id
         return sorted(directory.glob("part-*.parquet")) if directory.is_dir() else []
 
     def landed_sources(self) -> list[str]:
@@ -124,7 +128,9 @@ class DuckDBCatalog:
         # Identifiers reach SQL only after ident()/literal() vetting, so the
         # interpolation below cannot carry an injection payload (R9).
         view = ident(source_id)
-        glob = literal(str(self.storage_root / self.tenant / source_id / "part-*.parquet"))
+        glob = literal(
+            str(tenant_root(self.storage_root, self.tenant) / source_id / "part-*.parquet")
+        )
 
         if source.grain:
             grain = ", ".join(ident(column.upper()) for column in source.grain)

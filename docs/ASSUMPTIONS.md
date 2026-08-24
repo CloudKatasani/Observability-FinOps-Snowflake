@@ -136,6 +136,43 @@ populated only from **mid-August 2024** onward.
   ORGADMIN/GLOBALORGADMIN provisioning required.
   <https://docs.snowflake.com/en/user-guide/collaboration/listings/organizational/org-listing-create>
 
+### 6a. Re-verified at Phase 7 (2026-08-24) — exact clause syntax
+
+Re-checked when writing the emitters in `packages/dataproducts/emitters/`. Note that
+`docs.snowflake.com` is unreachable from the build environment's egress proxy, so these
+were confirmed from indexed documentation search results rather than by fetching the
+pages directly; the pages themselves remain authoritative.
+
+- **`AI_VERIFIED_QUERIES`** sits **after `COMMENT` and before `COPY GRANTS`**, and each
+  entry takes the form
+  `<name> AS ( QUESTION '<question>' VERIFIED_AT <unix seconds> ONBOARDING_QUESTION <bool>
+  VERIFIED_BY '(<purpose> = <contact>)' SQL '<query>' )`. Support for verified queries in
+  semantic views shipped 2026-04-05.
+  <https://docs.snowflake.com/en/user-guide/views-semantic/sql> ·
+  <https://docs.snowflake.com/en/release-notes/2026/other/2026-04-05-semantic-views-verified-queries>
+- **`CREATE ORGANIZATION LISTING`** —
+  `CREATE ORGANIZATION LISTING [IF NOT EXISTS] <name> [SHARE <share> | APPLICATION PACKAGE <pkg>]
+  AS '<yaml manifest>' [PUBLISH = TRUE|FALSE]`, or `FROM '<stage location>'` for a manifest on
+  a stage. `REVIEW =` belongs to `CREATE EXTERNAL LISTING`, **not** to organization listings.
+  Manifest: `title` (required, ≤110 chars), `description` (≤7500), `organization_profile`
+  (defaults to `INTERNAL`), `organization_targets` (required — access list plus support and
+  approver contacts), `locations` (optional), `auto_fulfillment`, plus optional `resources`,
+  `listing_terms`, `data_dictionary`, `usage_examples`, `data_attributes`.
+  <https://docs.snowflake.com/en/sql-reference/sql/create-organization-listing> ·
+  <https://docs.snowflake.com/en/user-guide/collaboration/listings/organizational/org-listing-manifest-reference>
+- **`CREATE AGENT`** —
+  `CREATE [OR REPLACE] AGENT [IF NOT EXISTS] <name> [COMMENT = '<comment>']
+  [PROFILE = '<profile object>'] FROM SPECIFICATION $$<spec>$$`. `COMMENT` precedes
+  `PROFILE`. The warehouse is not a clause on the statement; it is named inside the
+  spec's `tool_resources` for the tools that execute SQL.
+  <https://docs.snowflake.com/en/sql-reference/sql/create-agent>
+
+This closes the `AI_VERIFIED_QUERIES`, `CREATE ORGANIZATION LISTING`, and `CREATE AGENT`
+halves of **U-4**. The region/edition availability matrix and `SHOW AGENTS`/`ALTER AGENT`
+syntax remain unconfirmed; the emitters therefore avoid pinning anything region-specific
+(see A-20) and publication stays a human act against a real account, where a feature that
+is unavailable fails loudly at apply time rather than silently in generated text.
+
 ## 7. Verified — snowflake-connector-python
 
 Current **4.7.2** (Aug 2026), Python ≥ 3.10. Extras: `[pandas]` (pyarrow/pandas),
@@ -205,3 +242,9 @@ provider defaults to `none`). <https://platform.claude.com/docs/en/about-claude/
 | A-15 | LICENSE is a proprietary all-rights-reserved placeholder | BUILD_PROMPT names a LICENSE file but no licence; this is a client deliverable — granting open-source rights is not ours to decide | Owner picks the delivery licence |
 | A-16 | `apps/api` deps include SQLAlchemy 2 async + asyncpg now (readiness checks); Alembic + models arrive with the first metadata tables | §6 pins SQLModel/SQLAlchemy + Alembic; readiness needs a real DB ping today | First persistent model (Phase 1 uploads) |
 | A-17 | **The HLD worked example's stated total of $156 is treated as including non-compute components the summary does not itemise; the engine asserts $126 for compute + cloud services.** | BUILD_PROMPT §10.2 gives: 40 metered credits, direct 18/9/3, 10 idle, $6 cloud services, Marketing $75.60, total $156. The engine reproduces **every per-team figure exactly** (Marketing $75.60, Finance $37.80, Ops $12.60) — those are what validate the allocation maths. But 40 credits x $3 = $120, plus $6 cloud services = **$126**, and the three per-team figures sum to precisely that. The $30 gap is exactly 10 credits. Since storage allocates by database owner tag and serverless/AI by object tag (§10.2), the most likely reading is that $156 is the team's full chargeback line including those components. Asserting $156 against a compute-only calculation would require inventing 10 credits from nowhere. | HLD owner confirms whether $156 includes storage/serverless/AI; if it is a typo, no code changes — only this note and the test comment. If it turns out compute-only, the allocation model is wrong and must be revisited before chargeback publishes. |
+| A-18 | **Phase 7 defers durable persistence of data-product approval events.** The lifecycle ledger (`snowobs_dataproducts.publish.LifecycleLedger`) is append-only but in-process: a restart loses the recorded transitions, and each API worker holds its own. The approval *evidence requirements* (named actor, timestamp, non-trivial reason, refusal on an unevidenced transition) are fully implemented and tested. | R8 requires the approval to be recorded, and it is — but the durable store is the Postgres audit table in §17, which needs the app-metadata schema and Alembic migrations that A-16 defers to the first persistent model. Building a second, product-specific persistence layer now would have to be torn out when the audit table lands. | The first Alembic migration for app metadata. The ledger's `ApprovalEvent.to_record()` is already shaped for that table, and `ProductService` takes a ledger by injection so the swap is a constructor change. Until then, a multi-worker deployment must not be told its approvals survive a restart. |
+| A-19 | The approving human's identity reaches the API through an `X-Snowobs-Actor` header rather than an authenticated session. A request without it is **refused**, never attributed to "system". | §17's OIDC/RBAC layer is not built yet; R8's requirement is that a human is named on the record, and refusing an anonymous approval satisfies that today. Defaulting the actor would have been the failure mode worth avoiding. | OIDC lands (§17): the header becomes a fallback for service-to-service calls or is removed entirely, and the actor comes from the verified session. Until then this header is trusted, so the API must not be exposed outside an authenticated perimeter. |
+| A-20 | The emitted `CREATE AGENT` spec **omits** `models.orchestration` unless a deployment pins one via `SnowflakeTarget.orchestration_model`, and the organization listing manifest omits `locations` unless regions are configured. | Cortex model availability and listing fulfilment regions vary by account region and edition, and U-4's availability matrix is still unconfirmed. An unpinned spec takes the account default; a hard-coded identifier would be a guess that fails at apply time in some regions and, worse, silently selects a different model in others. | U-4 closes, or a client account's region/edition matrix is known — then pin per deployment in configuration, not in code. |
+| A-21 | `organization_targets.access` is emitted as `- all_accounts: true` when no specific consumer accounts are configured, and as `- account: <locator>` entries when they are. | The manifest reference confirms `organization_targets` is required and carries an access list plus support and approver contacts, but the exact key for "the whole organization" could not be read first-hand (docs egress blocked, see §6a). The value is deployment configuration on `SnowflakeTarget`, so correcting it is a config edit rather than a code change, and the listing is created with `PUBLISH = FALSE` so a wrong target cannot expose the product before a human reviews the manifest. | First real organization-listing apply, or direct access to the manifest reference page. |
+| A-22 | Phase 7 ships as **one** workspace package, `packages/dataproducts` (`snowobs_dataproducts`), holding the registry, contracts, emitters, and publish workflow — rather than the `packages/products` + `packages/artifacts` split named in CLAUDE.md §5. | Every emitter reads the product declaration and its derived contract, and the contract is derived from the same resolution the emitters use; splitting them across two packages would put a hard dependency edge between them and duplicate the resolution layer for no isolation benefit. The `emitters/` subpackage keeps the artifact code separable if it ever needs to move. | CLAUDE.md §5 is updated to match, or a second consumer of the artifact emitters appears that does not already depend on the product registry. |
+| A-23 | A data product's relations are grouped **one per semantic entity**, and a product may not mix declared time grains within one relation (the registry refuses it at load). Ratio, percentile, and distinct-count measures are published as semantic-view `FACTS`, never `METRICS`. | Metrics from two facts cannot share a relation without a fan-out join or an invented key (§8.3); and the compiler resolves a mixed-grain request to the coarsest grain, which silently regrains the finer metric so every figure read from it means something other than its definition says. Non-additive measures published as `METRICS` would be re-aggregated by any consumer tool into a wrong number (R12). | A semantic-layer change that makes cross-entity relations safe, or a Snowflake semantic-view feature that expresses non-additivity directly. |
