@@ -1,0 +1,33 @@
+id: fact_spend_currency_daily
+name: Spend in currency (daily)
+kind: fact
+description: >
+  Daily spend in contract currency per account and usage type, from
+  ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY. Values restate until month close,
+  so anything inside the restatement window is flagged provisional (R7, §9.3).
+sources: [usage_in_currency_daily]
+grain: [ACCOUNT_NAME, USAGE_DAY, USAGE_TYPE]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    "ACCOUNT_NAME"                                        AS ACCOUNT_NAME,
+    "ORGANIZATION_NAME"                                   AS ORGANIZATION_NAME,
+    CAST("USAGE_DATE" AS DATE)                            AS USAGE_DAY,
+    "USAGE_TYPE"                                          AS USAGE_TYPE,
+    "CURRENCY"                                            AS CURRENCY,
+    MONEY("USAGE")                                        AS USAGE_UNITS,
+    MONEY("USAGE_IN_CURRENCY")                            AS SPEND_IN_CURRENCY
+  FROM usage_in_currency_daily
+dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the spend belongs to.
+  - name: usage_type
+    expression: USAGE_TYPE
+    description: Billing usage type (compute, storage, data transfer, …).
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date.
+  - name: currency
+    expression: CURRENCY
+    description: Contract currency.

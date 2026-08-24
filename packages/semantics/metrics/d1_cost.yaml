@@ -1,0 +1,279 @@
+# D1 — Cost & spend (BUILD_PROMPT §9.2). Latency floors follow the slowest
+# required source (R7); figures inside a restatement window are provisional.
+- id: cost.total_credits
+  name: Total credits consumed
+  domain: cost
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_USED)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: day
+  dimensions: [service_type, usage_day]
+  synonyms: [credits, credit consumption, total credits]
+  description: >
+    Total Snowflake credits consumed, from METERING_DAILY_HISTORY. Includes
+    compute, cloud services (raw, before the daily 10% adjustment), and
+    serverless.
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["total credits last 30 days", "credits by service type this month"]
+
+- id: cost.billed_credits
+  name: Billed credits
+  domain: cost
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_BILLED)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: day
+  dimensions: [service_type, usage_day]
+  synonyms: [billed credits, chargeable credits, net credits]
+  description: >
+    Credits actually billed — compute plus cloud services net of the daily 10%
+    adjustment. This is the figure the chargeback reconciliation gate reconciles
+    allocated cost against (R6).
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  allocation_method: metered
+  verified_queries: ["billed credits this month", "billed credits by day"]
+
+- id: cost.compute_credits
+  name: Compute credits
+  domain: cost
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_COMPUTE)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: day
+  dimensions: [service_type, usage_day]
+  synonyms: [warehouse credits, compute consumption]
+  description: Virtual-warehouse compute credits, excluding cloud services.
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+
+- id: cost.cloud_services_credits
+  name: Cloud services credits (billed)
+  domain: cost
+  entity: fact_cost_daily
+  expression: SUM(CREDITS_CLOUD_SERVICES_BILLED)
+  format: {type: number, decimals: 2, unit: credits}
+  grain: day
+  dimensions: [service_type, usage_day]
+  synonyms: [cloud services, cloud services billing]
+  description: >
+    Cloud-services credits net of the daily adjustment. Snowflake bills only the
+    portion exceeding 10% of that day's compute; the adjustment column carries a
+    negative rebate and is added here.
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+
+- id: cost.cloud_services_ratio
+  name: Cloud services ratio
+  domain: cost
+  entity: fact_cost_daily
+  expression: SAFE_RATIO(SUM(CREDITS_CLOUD_SERVICES_RAW), SUM(CREDITS_COMPUTE))
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [usage_day]
+  synonyms: [cloud services percentage, cloud services vs compute]
+  description: >
+    Raw cloud-services credits as a fraction of compute credits. Above 10% the
+    excess is billable; at or below it the whole day's cloud services is rebated.
+  requires_sources: [metering_daily_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  thresholds: {warn: 0.08, critical: 0.10}
+  owner: finops
+
+- id: cost.spend_usd
+  name: Spend in currency
+  domain: cost
+  entity: fact_spend_currency_daily
+  expression: SUM(SPEND_IN_CURRENCY)
+  format: {type: currency, decimals: 2, unit: USD}
+  grain: day
+  dimensions: [usage_day, account, usage_type]
+  synonyms: [spend, dollars, cost in currency, bill]
+  description: >
+    Spend in contract currency from ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY.
+    Values restate until month close, so recent figures carry a provisional badge.
+  requires_sources: [usage_in_currency_daily]
+  latency_floor_minutes: 4320
+  direction: lower_is_better
+  provisional_window_days: 35
+  owner: finops
+  verified_queries: ["spend this month", "spend by account last quarter"]
+
+- id: cost.by_warehouse_credits
+  name: Credits by warehouse
+  domain: cost
+  entity: fact_warehouse_metering_hourly
+  expression: SUM(CREDITS_COMPUTE)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [warehouse spend, credits per warehouse]
+  description: Metered compute credits per warehouse.
+  requires_sources: [warehouse_metering_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: finops
+  verified_queries: ["top warehouses by credits", "credits for WH_ELT_CORE last week"]
+
+- id: cost.attributed_credits
+  name: Attributed credits
+  domain: cost
+  entity: fact_warehouse_metering_hourly
+  expression: SUM(CREDITS_ATTRIBUTED)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [direct credits, query-attributed credits]
+  description: >
+    Compute credits attributable to individual queries. Excludes warehouse idle
+    time, cloud services, and (per the documented view behaviour) queries under
+    ~100 ms and Adaptive Warehouse jobs.
+  requires_sources: [query_attribution_history, warehouse_metering_history]
+  latency_floor_minutes: 480
+  direction: neutral
+  allocation_method: direct
+  owner: finops
+
+- id: cost.idle_credits
+  name: Idle credits
+  domain: cost
+  entity: fact_warehouse_metering_hourly
+  expression: SUM(CREDITS_IDLE)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [idle, wasted credits, unattributed compute]
+  description: >
+    Metered compute credits with no attributable query — the warehouse was
+    running but not working. Allocated to teams pro-rata to their direct usage
+    on that warehouse (HLD §10.2).
+  requires_sources: [warehouse_metering_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  allocation_method: idle_share
+  owner: finops
+  verified_queries: ["idle credits by warehouse", "which warehouse wastes the most"]
+
+- id: cost.per_query
+  name: Cost per query
+  domain: cost
+  entity: fact_query_execution
+  expression: SAFE_RATIO(SUM(CREDITS_ATTRIBUTED), COUNT(*))
+  format: {type: number, decimals: 6, unit: credits}
+  grain: day
+  dimensions: [warehouse, team, fingerprint, query_type]
+  synonyms: [unit cost per query, average query cost]
+  description: Attributed compute credits divided by query count.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  owner: finops
+
+- id: cost.per_tb_scanned
+  name: Cost per TB scanned
+  domain: cost
+  entity: fact_query_execution
+  expression: SAFE_RATIO(SUM(CREDITS_ATTRIBUTED), SUM(BYTES_SCANNED) / 1099511627776.0)
+  format: {type: number, decimals: 4, unit: credits/TB}
+  grain: day
+  dimensions: [warehouse, team]
+  synonyms: [unit cost per terabyte, scan efficiency cost]
+  description: Attributed credits per terabyte scanned — a unit-cost trend line.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  owner: finops
+
+- id: cost.by_team_credits
+  name: Credits by team (direct)
+  domain: cost
+  entity: fact_query_execution
+  expression: SUM(CREDITS_ATTRIBUTED)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: day
+  dimensions: [team, warehouse, database]
+  synonyms: [team spend, cost by team, departmental cost]
+  description: >
+    Directly attributed credits by team, from the query tag. This is the direct
+    component only — the full chargeback figure adds idle and cloud-services
+    shares (see the allocation engine).
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  allocation_method: direct
+  owner: finops
+  verified_queries: ["credits by team this month", "which team spent the most last week"]
+
+- id: cost.unattributed_share
+  name: Unattributed spend share
+  domain: cost
+  entity: fact_query_execution
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN QUERY_TAG_TEAM IS NULL THEN CREDITS_ATTRIBUTED ELSE 0 END),
+      SUM(CREDITS_ATTRIBUTED)
+    )
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [warehouse, database]
+  synonyms: [untagged spend, unattributed percentage, tagging coverage gap]
+  description: >
+    Fraction of attributed credits carrying no team tag. The FinOps target is
+    below 5%; the leaderboard of contributing warehouses is public by design.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  thresholds: {warn: 0.05, critical: 0.15}
+  owner: finops
+  verified_queries: ["how much spend is untagged", "untagged spend by warehouse"]
+
+- id: cost.top5_concentration
+  name: Spend concentration (top 5 warehouses)
+  domain: cost
+  entity: fact_warehouse_metering_hourly
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN WAREHOUSE_RANK <= 5 THEN CREDITS_COMPUTE ELSE 0 END),
+      SUM(CREDITS_COMPUTE)
+    )
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [metering_hour]
+  synonyms: [concentration, top 5 share]
+  description: >
+    Share of compute credits consumed by the five largest warehouses — how
+    concentrated the bill is, and therefore how much a single change can move it.
+  requires_sources: [warehouse_metering_history]
+  latency_floor_minutes: 180
+  direction: neutral
+  owner: finops
+
+- id: cost.platform_self_cost
+  name: Platform self-cost
+  domain: cost
+  entity: fact_query_execution
+  expression: >
+    SUM(CASE WHEN REGEX_CONTAINS(COALESCE(QUERY_TAG_TEAM, ''), '^SNOWOBS')
+             THEN CREDITS_ATTRIBUTED ELSE 0 END)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [warehouse]
+  synonyms: [tool cost, observability platform cost, self cost]
+  description: >
+    Credits consumed by this platform's own queries, identified by its query
+    tag. The NFR is that the platform costs under 2% of the spend it observes —
+    the watcher's own bill, reported honestly.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  owner: platform

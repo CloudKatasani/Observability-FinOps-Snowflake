@@ -1,0 +1,206 @@
+# D2 — Warehouse & compute efficiency (BUILD_PROMPT §9.2).
+- id: wh.utilisation_pct
+  name: Warehouse utilisation
+  domain: warehouse
+  entity: fact_warehouse_metering_hourly
+  expression: SAFE_RATIO(SUM(CREDITS_ATTRIBUTED), SUM(CREDITS_COMPUTE))
+  format: {type: percent, decimals: 1}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [utilisation, utilization, warehouse efficiency, busy fraction]
+  description: >
+    Share of metered compute credits that queries actually accounted for. Low
+    utilisation with no queueing is the signature of an over-sized warehouse.
+  requires_sources: [warehouse_metering_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: higher_is_better
+  thresholds: {warn: 0.4, critical: 0.25}
+  owner: platform
+  verified_queries: ["warehouse utilisation last 30 days", "least utilised warehouses"]
+
+- id: wh.idle_pct
+  name: Idle credit share
+  domain: warehouse
+  entity: fact_warehouse_metering_hourly
+  expression: SAFE_RATIO(SUM(CREDITS_IDLE), SUM(CREDITS_COMPUTE))
+  format: {type: percent, decimals: 1}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [idle percentage, waste percentage]
+  description: Metered credits with no attributable query, as a share of compute.
+  requires_sources: [warehouse_metering_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  thresholds: {warn: 0.4, critical: 0.6}
+  owner: platform
+
+- id: wh.queue_overload_pct
+  name: Queue overload time share
+  domain: warehouse
+  entity: fact_warehouse_load_hourly
+  expression: SAFE_RATIO(SUM(QUEUED_OVERLOAD_MS), SUM(ELAPSED_MS))
+  format: {type: percent, decimals: 1}
+  grain: hour
+  dimensions: [warehouse, load_hour]
+  synonyms: [queueing, queue time, overload queueing]
+  description: >
+    Share of total elapsed query time spent queued because the warehouse was
+    already saturated — the signal that a warehouse is under-provisioned.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 0.05, critical: 0.15}
+  owner: platform
+  verified_queries: ["which warehouses are queueing", "queue time last week"]
+
+- id: wh.queue_provisioning_pct
+  name: Queue provisioning time share
+  domain: warehouse
+  entity: fact_warehouse_load_hourly
+  expression: SAFE_RATIO(SUM(QUEUED_PROVISIONING_MS), SUM(ELAPSED_MS))
+  format: {type: percent, decimals: 2}
+  grain: hour
+  dimensions: [warehouse, load_hour]
+  synonyms: [provisioning delay, cold start time]
+  description: Share of elapsed time spent waiting for compute to be provisioned.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: wh.query_count
+  name: Queries per warehouse
+  domain: warehouse
+  entity: fact_warehouse_load_hourly
+  expression: SUM(QUERY_COUNT)
+  format: {type: integer, decimals: 0}
+  grain: hour
+  dimensions: [warehouse, load_hour]
+  synonyms: [warehouse query volume]
+  description: Queries executed per warehouse-hour.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: neutral
+  owner: platform
+
+- id: wh.avg_execution_ms
+  name: Average execution time
+  domain: warehouse
+  entity: fact_warehouse_load_hourly
+  expression: SAFE_RATIO(SUM(EXECUTION_MS), SUM(QUERY_COUNT))
+  format: {type: duration_ms, decimals: 0}
+  grain: hour
+  dimensions: [warehouse, load_hour]
+  synonyms: [average runtime per warehouse]
+  description: Mean execution time per query on the warehouse.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: wh.autosuspend_seconds
+  name: Configured auto-suspend
+  domain: warehouse
+  entity: dim_warehouse
+  expression: MAX(AUTO_SUSPEND_SECONDS)
+  format: {type: integer, decimals: 0, unit: seconds}
+  grain: day
+  dimensions: [warehouse, configured_size]
+  synonyms: [auto suspend, suspend setting]
+  description: >
+    Configured auto-suspend delay. Policy is ≤60 s for ELT warehouses and
+    ≤300 s for BI warehouses; longer settings burn idle credits between queries.
+  requires_sources: [warehouses]
+  latency_floor_minutes: 0
+  direction: lower_is_better
+  thresholds: {warn: 300, critical: 600}
+  owner: platform
+  verified_queries: ["warehouses with long auto-suspend"]
+
+- id: wh.max_clusters
+  name: Configured max clusters
+  domain: warehouse
+  entity: dim_warehouse
+  expression: MAX(MAX_CLUSTERS)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [warehouse, scaling_policy]
+  synonyms: [multi cluster limit, scale out limit]
+  description: Maximum clusters a multi-cluster warehouse may scale out to.
+  requires_sources: [warehouses]
+  latency_floor_minutes: 0
+  direction: neutral
+  owner: platform
+
+- id: wh.zombie_credits
+  name: Zombie warehouse credits
+  domain: warehouse
+  entity: fact_warehouse_metering_hourly
+  expression: SUM(CASE WHEN CREDITS_ATTRIBUTED = 0 THEN CREDITS_COMPUTE ELSE 0 END)
+  format: {type: number, decimals: 1, unit: credits}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [zombie warehouses, credits with no queries, dead warehouses]
+  description: >
+    Credits metered in hours where no query was attributed at all — a warehouse
+    running with nothing to do.
+  requires_sources: [warehouse_metering_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["zombie warehouses", "warehouses burning credits with no queries"]
+
+- id: wh.cloud_services_credits
+  name: Cloud services credits by warehouse
+  domain: warehouse
+  entity: fact_warehouse_metering_hourly
+  expression: SUM(CREDITS_CLOUD_SERVICES)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: hour
+  dimensions: [warehouse, metering_hour]
+  synonyms: [per-warehouse cloud services]
+  description: >
+    Raw per-warehouse cloud-services credits. The daily 10% adjustment is an
+    account-level calculation and is deliberately NOT applied here — summing
+    this column does not give a billable figure (see cost.cloud_services_credits).
+  requires_sources: [warehouse_metering_history]
+  latency_floor_minutes: 180
+  direction: lower_is_better
+  owner: platform
+
+- id: wh.credits_per_query
+  name: Credits per query by warehouse
+  domain: warehouse
+  entity: fact_query_execution
+  expression: SAFE_RATIO(SUM(CREDITS_ATTRIBUTED), COUNT(*))
+  format: {type: number, decimals: 6, unit: credits}
+  grain: day
+  dimensions: [warehouse, warehouse_size]
+  synonyms: [per query cost by warehouse]
+  description: Attributed credits per query, sliced by warehouse and size.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  owner: platform
+
+- id: wh.spill_query_share
+  name: Share of queries spilling
+  domain: warehouse
+  entity: fact_query_execution
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN BYTES_SPILLED_LOCAL > 0 OR BYTES_SPILLED_REMOTE > 0 THEN 1 ELSE 0 END),
+      COUNT(*)
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [warehouse, warehouse_size]
+  synonyms: [spilling queries, memory pressure]
+  description: >
+    Fraction of queries spilling to storage — the signal that a warehouse is
+    under-sized for its workload, as opposed to merely busy.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 0.02, critical: 0.10}
+  owner: platform

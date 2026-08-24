@@ -62,6 +62,42 @@ All notable changes to this project are documented here. The format follows
   generator determinism and every planted phenomenon, ingestion round-trip,
   malformed/abusive input handling, incremental merge, and coverage assessment.
 
+### Added — Phase 2 (Semantic layer, dual engines, SQL guard, parity)
+
+- **Semantic model** (`packages/semantics/`): 6 curated entities (facts and a
+  warehouse dimension) and **41 KPIs across domains D1–D3**, declared once in
+  YAML. Cross-validated at load: a metric cannot claim a freshness floor faster
+  than its slowest source (R7), reference an unregistered source, or slice by a
+  dimension its entity cannot reach.
+- **Compiler**: `MetricRequest` → validated IR → SQLGlot → dialect SQL. Pure and
+  deterministic (byte-identical SQL for the same request). Injects the time
+  filter on the entity's own time column, applies row-level security
+  server-side (an empty allowlist selects nothing, never everything), escapes
+  literals, rejects unsafe identifiers, forces a `LIMIT`, and orders totally so
+  tiles do not reshuffle on ties.
+- **Fan-out safety**: mixing metrics from facts at different grains produces one
+  aggregate CTE per fact joined on shared keys — a test asserts that adding a
+  second metric cannot change the first metric's totals.
+- **Dialect shims**: nine portable constructs, each rewritten per engine and
+  rewritten to a fixed point so nested shims resolve. A guard fails the build if
+  SQLGlot ever claims a shim name as a built-in — the failure mode that silently
+  bypassed `SAFE_RATIO` and would have returned float money (§27.7).
+- **SQL guard** (`packages/sqlguard/`): SQLGlot-parsed, single read-only
+  statement, allowlisted relations, forced limit, timeout and warehouse pin.
+  38 adversarial tests: stacked statements, comment-hidden payloads, writes
+  nested in subqueries, `SYSTEM$`/`GET_DDL` functions, union smuggling, and
+  fail-closed defaults.
+- **Engines** (`packages/engines/`): the `QueryEngine` protocol, the DuckDB
+  engine (guard-enforced, provenance-carrying results), and an RLS-aware result
+  cache keyed on `{sql fingerprint, dataset version, RLS context}`.
+- **Parity suite** — the critical one. Every metric is executed in both dialect
+  renderings against the same fixture data and compared row-set for row-set;
+  money matches exactly, with tolerances only for approximate percentiles,
+  documented in `docs/PARITY_EXCEPTIONS.md`. Plus 82 golden SQL snapshots
+  (41 metrics × 2 dialects). `make test-parity` gates CI.
+- **Generated `docs/KPI_CATALOG.md`** (`make catalog`) — from the YAML, never by
+  hand.
+
 ### Deferred (recorded, not stubbed)
 
 - `Dockerfile.allinone`, `docker-compose.demo.yml`, `make demo`, Terraform,

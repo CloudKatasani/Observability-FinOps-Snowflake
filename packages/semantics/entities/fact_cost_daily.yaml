@@ -1,0 +1,30 @@
+id: fact_cost_daily
+name: Cost by service type (daily)
+kind: fact
+description: >
+  Account-level daily metered and billed credits by service type, straight from
+  METERING_DAILY_HISTORY. Cloud-services credits are shown both raw and net of
+  the daily 10% adjustment; the *billed* figure is the one the reconciliation
+  gate reconciles against (R6, ASSUMPTIONS §4).
+sources: [metering_daily_history]
+grain: [SERVICE_TYPE, USAGE_DAY]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    "SERVICE_TYPE"                                        AS SERVICE_TYPE,
+    CAST("USAGE_DATE" AS DATE)                            AS USAGE_DAY,
+    MONEY("CREDITS_USED_COMPUTE")                         AS CREDITS_COMPUTE,
+    MONEY("CREDITS_USED_CLOUD_SERVICES")                  AS CREDITS_CLOUD_SERVICES_RAW,
+    MONEY("CREDITS_ADJUSTMENT_CLOUD_SERVICES")            AS CREDITS_CLOUD_SERVICES_ADJUSTMENT,
+    MONEY("CREDITS_USED_CLOUD_SERVICES" + "CREDITS_ADJUSTMENT_CLOUD_SERVICES")
+                                                          AS CREDITS_CLOUD_SERVICES_BILLED,
+    MONEY("CREDITS_USED")                                 AS CREDITS_USED,
+    MONEY("CREDITS_BILLED")                               AS CREDITS_BILLED
+  FROM metering_daily_history
+dimensions:
+  - name: service_type
+    expression: SERVICE_TYPE
+    description: Snowflake service type (WAREHOUSE_METERING, SERVERLESS_TASK, AI_SERVICES, …).
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date (account timezone).

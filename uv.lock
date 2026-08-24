@@ -11,9 +11,11 @@ members = [
     "snowobs",
     "snowobs-api",
     "snowobs-common",
+    "snowobs-engines",
     "snowobs-fixtures",
     "snowobs-ingest",
     "snowobs-semantics",
+    "snowobs-sqlguard",
     "snowobs-worker",
 ]
 
@@ -1154,6 +1156,27 @@ requires-dist = [
 ]
 
 [[package]]
+name = "snowobs-engines"
+version = "0.1.0"
+source = { editable = "packages/engines" }
+dependencies = [
+    { name = "duckdb" },
+    { name = "snowobs-common" },
+    { name = "snowobs-ingest" },
+    { name = "snowobs-semantics" },
+    { name = "snowobs-sqlguard" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "duckdb", specifier = ">=1.1" },
+    { name = "snowobs-common", editable = "packages/common" },
+    { name = "snowobs-ingest", editable = "packages/ingest" },
+    { name = "snowobs-semantics", editable = "packages/semantics" },
+    { name = "snowobs-sqlguard", editable = "packages/sqlguard" },
+]
+
+[[package]]
 name = "snowobs-fixtures"
 version = "0.1.0"
 source = { editable = "fixtures/generator" }
@@ -1208,6 +1231,21 @@ dependencies = [
 requires-dist = [
     { name = "pydantic", specifier = ">=2.10" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "snowobs-common", editable = "packages/common" },
+    { name = "sqlglot", specifier = ">=26.0" },
+]
+
+[[package]]
+name = "snowobs-sqlguard"
+version = "0.1.0"
+source = { editable = "packages/sqlguard" }
+dependencies = [
+    { name = "snowobs-common" },
+    { name = "sqlglot" },
+]
+
+[package.metadata]
+requires-dist = [
     { name = "snowobs-common", editable = "packages/common" },
     { name = "sqlglot", specifier = ">=26.0" },
 ]

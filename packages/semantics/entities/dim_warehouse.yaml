@@ -1,0 +1,33 @@
+id: dim_warehouse
+name: Warehouse
+kind: dimension
+description: >
+  Current warehouse configuration from the SHOW WAREHOUSES snapshot. Successive
+  snapshots build SCD2 history; the current row is what right-sizing and
+  auto-suspend compliance are evaluated against.
+sources: [warehouses]
+grain: [WAREHOUSE_NAME]
+scd: type2
+sql: |
+  SELECT
+    "NAME"                                                AS WAREHOUSE_NAME,
+    "SIZE"                                                AS WAREHOUSE_SIZE,
+    "TYPE"                                                AS WAREHOUSE_TYPE,
+    "AUTO_SUSPEND"                                        AS AUTO_SUSPEND_SECONDS,
+    "MIN_CLUSTER_COUNT"                                   AS MIN_CLUSTERS,
+    "MAX_CLUSTER_COUNT"                                   AS MAX_CLUSTERS,
+    "SCALING_POLICY"                                      AS SCALING_POLICY,
+    "OWNER"                                               AS OWNER_ROLE,
+    "RESOURCE_MONITOR"                                    AS RESOURCE_MONITOR,
+    "COMMENT"                                             AS WAREHOUSE_COMMENT
+  FROM warehouses
+dimensions:
+  - name: warehouse
+    expression: WAREHOUSE_NAME
+    description: Warehouse name.
+  - name: configured_size
+    expression: WAREHOUSE_SIZE
+    description: Currently configured size.
+  - name: scaling_policy
+    expression: SCALING_POLICY
+    description: STANDARD or ECONOMY multi-cluster scaling policy.

@@ -80,6 +80,9 @@ testpaths = ["packages", "apps", "fixtures"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-q"
+markers = [
+    "snowflake: requires a live Snowflake account (skipped by default, nightly in CI)",
+]
 
 [tool.coverage.run]
 source = ["packages"]

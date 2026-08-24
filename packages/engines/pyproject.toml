@@ -1,0 +1,25 @@
+[project]
+name = "snowobs-engines"
+version = "0.1.0"
+description = "Query engine adapters (Snowflake pushdown, embedded DuckDB) and the result cache"
+requires-python = ">=3.12"
+dependencies = [
+    "snowobs-common",
+    "snowobs-semantics",
+    "snowobs-sqlguard",
+    "snowobs-ingest",
+    "duckdb>=1.1",
+]
+
+[tool.uv.sources]
+snowobs-common = { workspace = true }
+snowobs-semantics = { workspace = true }
+snowobs-sqlguard = { workspace = true }
+snowobs-ingest = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/snowobs_engines"]

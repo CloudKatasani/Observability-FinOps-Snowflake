@@ -1,0 +1,29 @@
+id: fact_warehouse_load_hourly
+name: Warehouse load (hourly)
+kind: fact
+description: >
+  Average running, queued, and blocked query counts per warehouse-hour, derived
+  from query executions. Snowflake also publishes WAREHOUSE_LOAD_HISTORY; this
+  entity derives the same signals from QUERY_HISTORY so the metric works in
+  accounts (and extracts) where the load view was not exported.
+sources: [query_history]
+grain: [WAREHOUSE_NAME, LOAD_HOUR]
+time_column: LOAD_HOUR
+sql: |
+  SELECT
+    "WAREHOUSE_NAME"                                      AS WAREHOUSE_NAME,
+    TS_TRUNC('hour', TS_PARSE("START_TIME"))              AS LOAD_HOUR,
+    COUNT(*)                                              AS QUERY_COUNT,
+    SUM("QUEUED_OVERLOAD_TIME")                           AS QUEUED_OVERLOAD_MS,
+    SUM("QUEUED_PROVISIONING_TIME")                       AS QUEUED_PROVISIONING_MS,
+    SUM("TOTAL_ELAPSED_TIME")                             AS ELAPSED_MS,
+    SUM("EXECUTION_TIME")                                 AS EXECUTION_MS
+  FROM query_history
+  GROUP BY 1, 2
+dimensions:
+  - name: warehouse
+    expression: WAREHOUSE_NAME
+    description: Warehouse the load was observed on.
+  - name: load_hour
+    expression: LOAD_HOUR
+    description: Hour of observation.

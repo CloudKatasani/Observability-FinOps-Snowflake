@@ -4,7 +4,7 @@
 
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 
-.PHONY: dev infra infra-down test test-python test-web lint fmt typecheck build clean
+.PHONY: dev infra infra-down test test-python test-web test-parity lint fmt typecheck build clean catalog
 
 dev: ## Infra containers + API/worker/web with hot reload
 	./scripts/dev.sh
@@ -19,6 +19,9 @@ test: test-python test-web
 
 test-python:
 	uv run pytest
+
+test-parity: ## Dual-engine parity + golden SQL snapshots (gates merges, R1)
+	uv run pytest packages/engines -q
 
 test-web:
 	cd apps/web && npm test
@@ -35,6 +38,9 @@ fmt:
 typecheck:
 	uv run mypy packages apps
 	cd apps/web && npm run typecheck
+
+catalog: ## Regenerate docs/KPI_CATALOG.md from the metric YAML
+	uv run python -m snowobs_semantics.docgen
 
 build: ## Build all container images
 	docker build -f deploy/docker/Dockerfile.api -t snowobs-api:dev .

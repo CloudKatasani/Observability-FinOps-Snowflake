@@ -1,0 +1,244 @@
+# D3 — Query & workload performance (BUILD_PROMPT §9.2).
+- id: q.volume
+  name: Query volume
+  domain: query
+  entity: fact_query_execution
+  expression: COUNT(*)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [warehouse, team, user, query_type, execution_status, database]
+  synonyms: [queries, query count, workload volume]
+  description: Number of queries executed.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: neutral
+  owner: platform
+  verified_queries: ["how many queries ran yesterday", "query volume by team"]
+
+- id: q.failure_rate
+  name: Query failure rate
+  domain: query
+  entity: fact_query_execution
+  expression: >
+    SAFE_RATIO(
+      SUM(CASE WHEN EXECUTION_STATUS <> 'SUCCESS' THEN 1 ELSE 0 END),
+      COUNT(*)
+    )
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [warehouse, team, error_class, database, user]
+  synonyms: [failures, error rate, failed queries]
+  description: Share of queries that did not complete successfully.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 0.02, critical: 0.05}
+  owner: platform
+  verified_queries: ["query failure rate this week", "failures by error class"]
+
+- id: q.p50_elapsed_ms
+  name: p50 elapsed time
+  domain: query
+  entity: fact_query_execution
+  expression: PERCENTILE(0.5, ELAPSED_MS)
+  format: {type: duration_ms, decimals: 0}
+  grain: day
+  dimensions: [warehouse, team, query_type, fingerprint]
+  synonyms: [median query time, typical latency]
+  description: Median end-to-end query duration.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.p95_elapsed_ms
+  name: p95 elapsed time
+  domain: query
+  entity: fact_query_execution
+  expression: PERCENTILE(0.95, ELAPSED_MS)
+  format: {type: duration_ms, decimals: 0}
+  grain: day
+  dimensions: [warehouse, team, query_type, fingerprint]
+  synonyms: [p95 latency, tail latency]
+  description: >
+    95th-percentile query duration. Snowflake computes this approximately and
+    DuckDB exactly; the tolerance is documented in docs/PARITY_EXCEPTIONS.md.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+  verified_queries: ["p95 query time by warehouse"]
+
+- id: q.p99_elapsed_ms
+  name: p99 elapsed time
+  domain: query
+  entity: fact_query_execution
+  expression: PERCENTILE(0.99, ELAPSED_MS)
+  format: {type: duration_ms, decimals: 0}
+  grain: day
+  dimensions: [warehouse, team, query_type]
+  synonyms: [p99 latency, worst case latency]
+  description: 99th-percentile query duration (approximate on Snowflake).
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.compilation_share
+  name: Compilation time share
+  domain: query
+  entity: fact_query_execution
+  expression: SAFE_RATIO(SUM(COMPILATION_MS), SUM(ELAPSED_MS))
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [warehouse, team, query_type]
+  synonyms: [compile time, planning overhead]
+  description: >
+    Share of elapsed time spent compiling rather than executing. A high share on
+    short queries points at metadata or complexity overhead, not compute size.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.queue_share
+  name: Queue time share
+  domain: query
+  entity: fact_query_execution
+  expression: SAFE_RATIO(SUM(QUEUED_OVERLOAD_MS + QUEUED_PROVISIONING_MS), SUM(ELAPSED_MS))
+  format: {type: percent, decimals: 2}
+  grain: day
+  dimensions: [warehouse, team]
+  synonyms: [waiting time, queue share]
+  description: Share of elapsed time spent queued rather than running.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.bytes_scanned
+  name: Bytes scanned
+  domain: query
+  entity: fact_query_execution
+  expression: SUM(BYTES_SCANNED)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [warehouse, team, fingerprint, database]
+  synonyms: [data scanned, scan volume]
+  description: Total bytes read by queries.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.pruning_efficiency
+  name: Pruning efficiency
+  domain: query
+  entity: fact_query_execution
+  expression: >
+    1 - SAFE_RATIO(SUM(PARTITIONS_SCANNED), SUM(PARTITIONS_TOTAL))
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [warehouse, team, fingerprint, database]
+  synonyms: [partition pruning, pruning, scan efficiency]
+  description: >
+    Fraction of micro-partitions the optimiser skipped. A collapse here — the
+    same query suddenly scanning everything — is the classic cause of a query
+    cost regression, and is what the offender detector looks for.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: higher_is_better
+  thresholds: {warn: 0.7, critical: 0.4}
+  owner: platform
+  verified_queries: ["worst pruning fingerprints", "which queries scan every partition"]
+
+- id: q.full_scan_count
+  name: Full-scan queries
+  domain: query
+  entity: fact_query_execution
+  expression: >
+    SUM(CASE WHEN PARTITIONS_TOTAL > 0 AND PARTITIONS_SCANNED >= PARTITIONS_TOTAL * 0.95
+             THEN 1 ELSE 0 END)
+  format: {type: integer, decimals: 0}
+  grain: day
+  dimensions: [warehouse, team, fingerprint]
+  synonyms: [table scans, full scans]
+  description: Queries scanning ≥95% of available micro-partitions.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.spill_local_bytes
+  name: Local spill bytes
+  domain: query
+  entity: fact_query_execution
+  expression: SUM(BYTES_SPILLED_LOCAL)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [warehouse, team, fingerprint]
+  synonyms: [local spill, disk spill]
+  description: Bytes spilled to local SSD — the first sign of memory pressure.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  owner: platform
+
+- id: q.spill_remote_bytes
+  name: Remote spill bytes
+  domain: query
+  entity: fact_query_execution
+  expression: SUM(BYTES_SPILLED_REMOTE)
+  format: {type: bytes, decimals: 2}
+  grain: day
+  dimensions: [warehouse, team, fingerprint]
+  synonyms: [remote spill, spill to remote storage]
+  description: >
+    Bytes spilled to remote storage — a fire alarm, not a warning: the query is
+    orders of magnitude slower than it should be and the warehouse is far too
+    small for it.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: lower_is_better
+  thresholds: {warn: 1073741824, critical: 10737418240}
+  owner: platform
+  verified_queries: ["which queries spill to remote storage", "remote spill by warehouse"]
+
+- id: q.cache_hit_rate
+  name: Result cache hit rate
+  domain: query
+  entity: fact_query_execution
+  expression: SAFE_RATIO(SUM(CACHE_FRACTION), COUNT(*))
+  format: {type: percent, decimals: 1}
+  grain: day
+  dimensions: [warehouse, team, query_type]
+  synonyms: [cache usage, result cache]
+  description: >
+    Mean share of a query's scan served from cache. Repeated dashboard refreshes
+    against unchanged data should be near 1; a low value on identical queries
+    means the cache is being defeated.
+  requires_sources: [query_history]
+  latency_floor_minutes: 45
+  direction: higher_is_better
+  owner: platform
+
+- id: q.offender_credits
+  name: Fingerprint cost (offender ranking)
+  domain: query
+  entity: fact_query_execution
+  expression: SUM(CREDITS_ATTRIBUTED)
+  format: {type: number, decimals: 3, unit: credits}
+  grain: day
+  dimensions: [fingerprint, warehouse, team, user]
+  synonyms: [top queries by cost, expensive queries, offenders]
+  description: >
+    Attributed credits per query fingerprint — the ranking that drives the
+    optimisation backlog. Fingerprints, not individual queries, because the same
+    parameterised statement running 10,000 times is one problem, not 10,000.
+  requires_sources: [query_history, query_attribution_history]
+  latency_floor_minutes: 480
+  direction: lower_is_better
+  owner: platform
+  verified_queries:
+    - "most expensive query fingerprints last 30 days"
+    - "top cost offenders for TEAM_DATA_ENG"

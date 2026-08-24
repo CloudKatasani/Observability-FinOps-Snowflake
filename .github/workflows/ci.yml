@@ -26,7 +26,11 @@ jobs:
       - name: Typecheck (mypy; strict on packages/)
         run: uv run mypy packages apps
       - name: Unit tests
-        run: uv run pytest --cov --cov-report=term
+        run: uv run pytest -m "not snowflake" --cov --cov-report=term
+
+      # R1: a metric without a passing parity test is not shipped. This gates merges.
+      - name: Dual-engine parity
+        run: make test-parity
 
   web:
     runs-on: ubuntu-latest
