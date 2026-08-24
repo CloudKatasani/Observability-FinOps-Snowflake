@@ -27,9 +27,14 @@ sql: |
     EPOCH_SECONDS(TS_PARSE("DATA_TIMESTAMP"), TS_PARSE("REFRESH_START_TIME"))
                                                           AS ACTUAL_LAG_SEC,
     EPOCH_SECONDS(TS_PARSE("REFRESH_START_TIME"), TS_PARSE("REFRESH_END_TIME"))
-                                                          AS REFRESH_DURATION_SEC
+                                                          AS REFRESH_DURATION_SEC,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM dynamic_table_refresh_history
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the dynamic table is defined in.
   - name: dynamic_table
     expression: QUALIFIED_NAME
     description: Fully qualified dynamic table name.

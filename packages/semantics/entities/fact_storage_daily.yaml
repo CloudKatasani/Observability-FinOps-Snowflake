@@ -7,6 +7,13 @@ description: >
   share of the account footprint needs no second query. The previous day's
   active bytes travel on every row, which makes growth an aggregate rather than
   a self-join — and keeps the growth metric fan-out safe.
+
+  Both the join to the account totals and the previous-day window match on the
+  account as well as the date. A lake holding four accounts has four
+  STORAGE_USAGE rows for every date, and joining on the date alone would repeat
+  each database four times over — quadrupling the reported footprint with no
+  error anywhere. The comparison is null-safe, so a single-account lake, where
+  nothing stamped an account, still matches.
 sources: [database_storage_usage_history, storage_usage]
 grain: [DATABASE_NAME, USAGE_DAY]
 time_column: USAGE_DAY
@@ -22,16 +29,22 @@ sql: |
     -- retained window, so the first day inside a requested range still has a
     -- comparison point instead of a null growth rate.
     LAG(d."AVERAGE_DATABASE_BYTES") OVER (
-      PARTITION BY d."DATABASE_NAME"
+      PARTITION BY d."DATABASE_NAME", ACCOUNT_OF(d)
       ORDER BY CAST(d."USAGE_DATE" AS DATE)
     )                                                     AS ACTIVE_BYTES_PRIOR_DAY,
     a."STORAGE_BYTES"                                     AS ACCOUNT_STORAGE_BYTES,
     a."STAGE_BYTES"                                       AS ACCOUNT_STAGE_BYTES,
-    a."FAILSAFE_BYTES"                                    AS ACCOUNT_FAILSAFE_BYTES
+    a."FAILSAFE_BYTES"                                    AS ACCOUNT_FAILSAFE_BYTES,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF(d)                                         AS ACCOUNT_NAME
   FROM database_storage_usage_history AS d
   LEFT JOIN storage_usage AS a
     ON CAST(a."USAGE_DATE" AS DATE) = CAST(d."USAGE_DATE" AS DATE)
+   AND COALESCE(ACCOUNT_OF(a), '') = COALESCE(ACCOUNT_OF(d), '')
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the database lives in.
   - name: database
     expression: DATABASE_NAME
     description: Database the storage belongs to.

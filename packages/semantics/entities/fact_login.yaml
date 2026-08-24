@@ -23,9 +23,14 @@ sql: |
     "SECOND_AUTHENTICATION_FACTOR"                        AS SECOND_AUTH_FACTOR,
     "IS_SUCCESS"                                          AS IS_SUCCESS,
     "ERROR_CODE"                                          AS ERROR_CODE,
-    "ERROR_MESSAGE"                                       AS ERROR_MESSAGE
+    "ERROR_MESSAGE"                                       AS ERROR_MESSAGE,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM login_history
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the attempt was made against.
   - name: user
     expression: USER_NAME
     description: User the attempt was made against.

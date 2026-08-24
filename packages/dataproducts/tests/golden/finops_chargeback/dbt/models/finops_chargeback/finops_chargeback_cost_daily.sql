@@ -32,7 +32,10 @@ WITH product AS (
       ) AS CREDITS_USED,
       (
         CAST("CREDITS_BILLED" AS DECIMAL(38, 9))
-      ) AS CREDITS_BILLED
+      ) AS CREDITS_BILLED,
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'METERING_DAILY_HISTORY') }}
   ) AS base
   GROUP BY

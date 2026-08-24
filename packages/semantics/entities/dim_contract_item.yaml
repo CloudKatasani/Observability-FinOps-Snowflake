@@ -1,0 +1,42 @@
+id: dim_contract_item
+name: Contract item
+kind: dimension
+description: >
+  The line items of the organization's contracts — capacity purchased,
+  rollover carried in, and free usage granted — from
+  ORGANIZATION_USAGE.CONTRACT_ITEMS. It is a snapshot with no time column of
+  its own: an amendment restates the rows rather than appending to them, which
+  is why the source is loaded as a full snapshot.
+
+  This entity is organization-scoped in the strict sense: a contract belongs to
+  the organization, not to any one account, and there is no account column to
+  invent one from. It therefore carries **no account dimension**, and a metric
+  built on it is reported as unavailable at account scope rather than being
+  silently filtered to a subset it cannot express (R3).
+sources: [contract_items]
+grain: [CONTRACT_NUMBER, CONTRACT_ITEM]
+sql: |
+  SELECT
+    "CONTRACT_NUMBER"                                     AS CONTRACT_NUMBER,
+    "CONTRACT_ITEM"                                       AS CONTRACT_ITEM,
+    "ORGANIZATION_NAME"                                   AS ORGANIZATION_NAME,
+    "CURRENCY"                                            AS CURRENCY,
+    MONEY("AMOUNT")                                       AS AMOUNT,
+    CAST("START_DATE" AS DATE)                            AS CONTRACT_START_DAY,
+    CAST("END_DATE" AS DATE)                              AS CONTRACT_END_DAY,
+    DATE_DIFF_DAYS(CAST("START_DATE" AS DATE), CAST("END_DATE" AS DATE))
+                                                          AS CONTRACT_TERM_DAYS
+  FROM contract_items
+dimensions:
+  - name: contract
+    expression: CONTRACT_NUMBER
+    description: Contract number the item belongs to.
+  - name: contract_item
+    expression: CONTRACT_ITEM
+    description: Line item (Capacity, Rollover, Free Usage, …).
+  - name: organization
+    expression: ORGANIZATION_NAME
+    description: Organization holding the contract.
+  - name: currency
+    expression: CURRENCY
+    description: Currency the item is denominated in.

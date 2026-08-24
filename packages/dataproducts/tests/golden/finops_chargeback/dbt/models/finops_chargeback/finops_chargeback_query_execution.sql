@@ -64,7 +64,10 @@ WITH product AS (
       ) AS CREDITS_ATTRIBUTED,
       (
         TRY_TO_TIMESTAMP_NTZ(q."_LOADED_AT")
-      ) AS LANDED_AT /* Landing time: its gap from STARTED_AT is this platform's own freshness. */
+      ) AS LANDED_AT, /* Landing time: its gap from STARTED_AT is this platform's own freshness. */
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* Which account these rows came from. A stamped column OFFLINE, where one */ /* lake holds several accounts; the connection LIVE, where it is not in the */ /* data at all (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'QUERY_HISTORY') }} AS q
     LEFT JOIN {{ source('account_usage', 'QUERY_ATTRIBUTION_HISTORY') }} AS a
       ON a."QUERY_ID" = q."QUERY_ID"

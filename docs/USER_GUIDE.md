@@ -5,7 +5,7 @@ assumed. Where a term is Snowflake's rather than ours, it is in the
 [glossary](#glossary).
 
 The product's own reference material lives elsewhere and is generated from the
-code, so it never drifts: [`KPI_CATALOG.md`](KPI_CATALOG.md) defines all 92 KPIs,
+code, so it never drifts: [`KPI_CATALOG.md`](KPI_CATALOG.md) defines all 108 KPIs,
 and [`DATA_CONTRACTS.md`](DATA_CONTRACTS.md) describes the published data products.
 
 ---

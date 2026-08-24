@@ -58,7 +58,7 @@ products, approvals) never mixes with telemetry — principle **R2**.
 
 | Package | Module root | Owns |
 |---|---|---|
-| `semantics` | `snowobs_semantics` | **The single source of truth.** 55 source definitions, 15 entities, 92 metrics — all YAML. `model.py` validates them, `compiler.py` turns a `MetricRequest` into dialect SQL, `dialect_shims.py` holds the portable construct vocabulary, `registry.py` the source registry, `docgen.py` generates `docs/KPI_CATALOG.md` |
+| `semantics` | `snowobs_semantics` | **The single source of truth.** 55 source definitions, 21 entities, 108 metrics — all YAML. `model.py` validates them, `compiler.py` turns a `MetricRequest` into dialect SQL, `dialect_shims.py` holds the portable construct vocabulary, `registry.py` the source registry, `docgen.py` generates `docs/KPI_CATALOG.md` |
 | `engines` | `snowobs_engines` | `base.py` (the `QueryEngine` protocol and `QueryResult` with its provenance), `duckdb_engine.py` (OFFLINE), `cache.py` (result cache), `parity.py` (the dual-engine harness), `snowflake_compat.py` (test-only DuckDB macros for Snowflake functions) |
 | `sqlguard` | `snowobs_sqlguard` | `guard.py` — the only path to an engine. Parses with SQLGlot, refuses anything that is not one read-only statement, allowlists relations, forces a `LIMIT`, and returns the execution envelope |
 | `ingest` | `snowobs_ingest` | OFFLINE pipeline: `profiler` → `mapper` → `validator` → `loader` (partitioned Parquet) → `catalog` (DuckDB views, grain-deduplicated) → `coverage` (the R3 matrix); plus `export_script_gen` (the extract kit) and `tenancy` (tenant id validation) |

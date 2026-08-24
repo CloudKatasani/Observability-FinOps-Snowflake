@@ -1,0 +1,88 @@
+id: fact_commitment_balance_daily
+name: Commitment balance (daily)
+kind: fact
+description: >
+  The daily burn-down of the organization's capacity commitment, from
+  ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY, with the contracted total joined
+  from CONTRACT_ITEMS so consumption can be stated as a share rather than as a
+  bare number of dollars.
+
+  Snowflake publishes four balances — free usage, rollover, capacity, and
+  on-demand consumption — and they are drawn down in that order.
+  COMMITMENT_REMAINING is the first three added together: what is left to spend
+  before usage becomes on-demand. ON_DEMAND_BALANCE is the opposite: money
+  already spent past the commitment, so it rises rather than falls, and a
+  non-zero figure means the organization is buying at list price.
+
+  COMMITMENT_DRAW is one day's drawdown, computed as the fall in
+  COMMITMENT_REMAINING against the previous day for the same contract over the
+  whole retained window. That keeps the runway metric a single-pass aggregate
+  and gives the first day inside a requested range a comparison point.
+
+  Balances restate until month close (72 h documented latency, and a longer
+  settlement), so figures inside the window are provisional (R7, §9.3).
+
+  Like `dim_contract_item`, this entity is organization-scoped in the strict
+  sense — a commitment belongs to a contract, not to an account — so it carries
+  **no account dimension** and its metrics are unavailable at account scope
+  rather than quietly filtered (R3).
+sources: [remaining_balance_daily, contract_items]
+grain: [CONTRACT_NUMBER, BALANCE_DAY]
+time_column: BALANCE_DAY
+sql: |
+  SELECT
+    b."CONTRACT_NUMBER"                                   AS CONTRACT_NUMBER,
+    b."ORGANIZATION_NAME"                                 AS ORGANIZATION_NAME,
+    b."CURRENCY"                                          AS CURRENCY,
+    CAST(b."DATE" AS DATE)                                AS BALANCE_DAY,
+    MONEY(b."FREE_USAGE_BALANCE")                         AS FREE_USAGE_BALANCE,
+    MONEY(b."ROLLOVER_BALANCE")                           AS ROLLOVER_BALANCE,
+    MONEY(b."CAPACITY_BALANCE")                           AS CAPACITY_BALANCE,
+    MONEY(b."ON_DEMAND_CONSUMPTION_BALANCE")              AS ON_DEMAND_BALANCE,
+    MONEY(
+      b."FREE_USAGE_BALANCE" + b."ROLLOVER_BALANCE" + b."CAPACITY_BALANCE"
+    )                                                     AS COMMITMENT_REMAINING,
+    MONEY(c.COMMITMENT_TOTAL)                             AS COMMITMENT_TOTAL,
+    MONEY(
+      c.COMMITMENT_TOTAL
+        - (b."FREE_USAGE_BALANCE" + b."ROLLOVER_BALANCE" + b."CAPACITY_BALANCE")
+    )                                                     AS COMMITMENT_CONSUMED,
+    MONEY(
+      LAG(b."FREE_USAGE_BALANCE" + b."ROLLOVER_BALANCE" + b."CAPACITY_BALANCE") OVER (
+        PARTITION BY b."CONTRACT_NUMBER"
+        ORDER BY CAST(b."DATE" AS DATE)
+      )
+        - (b."FREE_USAGE_BALANCE" + b."ROLLOVER_BALANCE" + b."CAPACITY_BALANCE")
+    )                                                     AS COMMITMENT_DRAW
+  FROM remaining_balance_daily AS b
+  LEFT JOIN (
+    SELECT
+      "CONTRACT_NUMBER"                                   AS CONTRACT_NUMBER,
+      MONEY(SUM("AMOUNT"))                                AS COMMITMENT_TOTAL
+    FROM contract_items
+    GROUP BY 1
+  ) AS c
+    ON c.CONTRACT_NUMBER = b."CONTRACT_NUMBER"
+dimensions:
+  - name: contract
+    expression: CONTRACT_NUMBER
+    description: Contract being drawn down.
+  - name: organization
+    expression: ORGANIZATION_NAME
+    description: Organization holding the contract.
+  - name: currency
+    expression: CURRENCY
+    description: Contract currency.
+  - name: balance_day
+    expression: BALANCE_DAY
+    description: Day the balance was published for.
+  - name: commitment_state
+    expression: >
+      CASE WHEN ON_DEMAND_BALANCE > 0 THEN 'ON_DEMAND'
+           WHEN CAPACITY_BALANCE > 0 THEN 'DRAWING_CAPACITY'
+           WHEN ROLLOVER_BALANCE > 0 THEN 'DRAWING_ROLLOVER'
+           ELSE 'DRAWING_FREE_USAGE' END
+    description: >
+      Which bucket the next dollar of spend comes out of — the plain-English
+      version of the four balances, and the thing a renewal conversation turns
+      on.

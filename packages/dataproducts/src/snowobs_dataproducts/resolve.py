@@ -216,6 +216,8 @@ def compile_dataset(
     spec: DatasetSpec,
     dialect: Dialect = Dialect.SNOWFLAKE,
     model: SemanticModel | None = None,
+    *,
+    account: str | None = None,
 ) -> CompiledQuery:
     """Compile the dataset's metrics through the semantic compiler (R1).
 
@@ -229,6 +231,7 @@ def compile_dataset(
         dimensions=list(spec.dimensions),
         bucket_time=spec.bucketed,
         limit=MAX_LIMIT,
+        account_context=account,
     )
     return compiler.compile(request, dialect)
 

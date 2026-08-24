@@ -11,7 +11,11 @@ description: >
   The USERS snapshot is joined on the grantee (one row per user, so no fan-out)
   purely to carry DISABLED and TYPE onto the grant. Without it, "a disabled
   account still holds a role" — the finding an access review exists to produce —
-  would need a join the metric layer cannot express.
+  would need a join the metric layer cannot express. The join also matches on
+  the account: user names repeat across a fleet, so joining on the name alone
+  would multiply every grant by the number of accounts that happen to have a
+  user of that name. The comparison is null-safe, so a single-account lake —
+  where nothing stamped an account — still matches.
 sources: [grants_to_users, users]
 grain: [ROLE_NAME, GRANTEE_NAME, GRANTED_AT]
 time_column: GRANTED_AT
@@ -25,11 +29,17 @@ sql: |
     TS_PARSE(g."DELETED_ON")                              AS REVOKED_AT,
     COALESCE(u."DISABLED", FALSE)                         AS GRANTEE_DISABLED,
     u."TYPE"                                              AS GRANTEE_TYPE,
-    TS_PARSE(u."LAST_SUCCESS_LOGIN")                      AS GRANTEE_LAST_LOGIN_AT
+    TS_PARSE(u."LAST_SUCCESS_LOGIN")                      AS GRANTEE_LAST_LOGIN_AT,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF(g)                                         AS ACCOUNT_NAME
   FROM grants_to_users AS g
   LEFT JOIN users AS u
     ON u."NAME" = g."GRANTEE_NAME"
+   AND COALESCE(ACCOUNT_OF(u), '') = COALESCE(ACCOUNT_OF(g), '')
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the grant was issued in.
   - name: role
     expression: ROLE_NAME
     description: Role granted.

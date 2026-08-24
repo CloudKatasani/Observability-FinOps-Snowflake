@@ -3,7 +3,7 @@
 A deployable enterprise application that turns Snowflake telemetry
 (`ACCOUNT_USAGE`, `ORGANIZATION_USAGE`, `INFORMATION_SCHEMA`, event tables) into a
 governed observability + FinOps capability: a conformed data model, a catalogue of
-~90 KPIs across 9 domains, fully allocated chargeback that reconciles to the metered
+~110 KPIs across 10 domains, fully allocated chargeback that reconciles to the metered
 bill, optimisation recommendations with dollar impact, forecasting and anomaly
 detection, and an agentic layer that manages the whole thing as versioned,
 contracted **data products**.

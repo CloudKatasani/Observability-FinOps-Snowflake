@@ -35,11 +35,18 @@ sql: |
     q."PERCENTAGE_SCANNED_FROM_CACHE"                     AS CACHE_FRACTION,
     MONEY(COALESCE(a."CREDITS_ATTRIBUTED_COMPUTE", 0))    AS CREDITS_ATTRIBUTED,
     -- Landing time: its gap from STARTED_AT is this platform's own freshness.
-    TS_PARSE(q."_LOADED_AT")                              AS LANDED_AT
+    TS_PARSE(q."_LOADED_AT")                              AS LANDED_AT,
+    -- Which account these rows came from. A stamped column OFFLINE, where one
+    -- lake holds several accounts; the connection LIVE, where it is not in the
+    -- data at all (see the ACCOUNT_OF shim).
+    ACCOUNT_OF(q)                                         AS ACCOUNT_NAME
   FROM query_history AS q
   LEFT JOIN query_attribution_history AS a
     ON a."QUERY_ID" = q."QUERY_ID"
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the query ran in.
   - name: warehouse
     expression: WAREHOUSE_NAME
     description: Warehouse the query ran on.

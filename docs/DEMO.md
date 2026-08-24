@@ -149,10 +149,14 @@ argument. Every line reconciles to the bill, and the arithmetic is inspectable.
 The R3 page. Sources grouped by domain, each with status, row count, window,
 freshness against its documented latency, and copy-pastable remediation.
 
-On the demo the generator lands **16 of the 55 registered sources**, and all
-**92 KPIs are enabled** — the fixture covers exactly what the catalogue needs. The
-39 sources shown as missing carry an upload instruction each; in LIVE mode the same
-column carries the exact `GRANT DATABASE ROLE …` statement instead.
+On the demo the generator lands **16 of the 55 registered sources**, and **96 of
+the 108 KPIs are enabled** — the fixture covers every account-scoped domain. The
+12 that are not are the organization ones (D10) that need a fleet-wide export from
+the organization account: they render as "Unavailable — requires
+`ORGANIZATION_USAGE.…`" with the remediation beside them, which is R3 working
+rather than a gap. The 39 sources shown as missing carry an upload instruction
+each; in LIVE mode the same column carries the exact `GRANT DATABASE ROLE …`
+statement instead.
 
 To show the unavailable path properly, take a source away — see
 [Showing R3 for real](#showing-r3-for-real) below.

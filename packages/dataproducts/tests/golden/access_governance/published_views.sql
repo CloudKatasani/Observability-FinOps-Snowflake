@@ -73,7 +73,10 @@ FROM (
     "SECOND_AUTHENTICATION_FACTOR" AS SECOND_AUTH_FACTOR,
     "IS_SUCCESS" AS IS_SUCCESS,
     "ERROR_CODE" AS ERROR_CODE,
-    "ERROR_MESSAGE" AS ERROR_MESSAGE
+    "ERROR_MESSAGE" AS ERROR_MESSAGE,
+    (
+      NULL
+    ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
   FROM login_history
 ) AS base
 GROUP BY
@@ -138,10 +141,18 @@ FROM (
     u."TYPE" AS GRANTEE_TYPE,
     (
       TRY_TO_TIMESTAMP_NTZ(u."LAST_SUCCESS_LOGIN")
-    ) AS GRANTEE_LAST_LOGIN_AT
+    ) AS GRANTEE_LAST_LOGIN_AT,
+    (
+      NULL
+    ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
   FROM grants_to_users AS g
   LEFT JOIN users AS u
     ON u."NAME" = g."GRANTEE_NAME"
+    AND COALESCE((
+      NULL
+    ), '') = COALESCE((
+      NULL
+    ), '')
 ) AS base
 GROUP BY
   (
@@ -209,7 +220,9 @@ FROM (
     ) AS DELETED_AT,
     MAX((
       TRY_TO_TIMESTAMP_NTZ("LAST_SUCCESS_LOGIN")
-    )) OVER () AS SNAPSHOT_AT,
+    )) OVER (PARTITION BY (
+      NULL
+    )) AS SNAPSHOT_AT,
     (
       CAST(CASE
         WHEN (
@@ -227,14 +240,19 @@ FROM (
               ),
               MAX((
                 TRY_TO_TIMESTAMP_NTZ("LAST_SUCCESS_LOGIN")
-              )) OVER ()
+              )) OVER (PARTITION BY (
+                NULL
+              ))
             )
           )
         ) AS DECIMAL(38, 15)) / CAST((
           86400
         ) AS DECIMAL(38, 15))
       END AS DECIMAL(38, 15))
-    ) AS DAYS_SINCE_LAST_LOGIN
+    ) AS DAYS_SINCE_LAST_LOGIN,
+    (
+      NULL
+    ) AS ACCOUNT_NAME /* The account this snapshot came from (see the ACCOUNT_OF shim). */
   FROM users
 ) AS base
 GROUP BY

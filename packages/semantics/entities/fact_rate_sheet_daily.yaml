@@ -1,0 +1,71 @@
+id: fact_rate_sheet_daily
+name: Rate sheet (daily)
+kind: fact
+description: >
+  The contracted price of one unit of each usage type, per account and per day,
+  from ORGANIZATION_USAGE.RATE_SHEET_DAILY. It is the only place the platform
+  can see *price* rather than consumption: two accounts that burn identical
+  credits can carry very different bills because of edition, region, and
+  contract discount, and nothing inside either account shows that.
+
+  COMPUTE_RATE isolates the currency-per-credit rate — the 'compute' usage type
+  alone. Overage rates ('overage-compute' and friends) are deliberately not
+  folded in: they price the credits consumed past a commitment and are much
+  higher, so averaging them together would report a blended figure that matches
+  no line on the invoice. COMPUTE_RATE_ROWS counts the rows behind the average
+  so a mean can be taken as a ratio of sums rather than with AVG, which returns
+  floating point (§27.7).
+
+  Rates restate when a contract is amended, and an amendment is backdated: a
+  rate read for last month can change next month.
+sources: [rate_sheet_daily]
+grain: [ACCOUNT_LOCATOR, RATE_DAY, USAGE_TYPE]
+time_column: RATE_DAY
+sql: |
+  SELECT
+    "ACCOUNT_NAME"                                        AS ACCOUNT_NAME,
+    "ACCOUNT_LOCATOR"                                     AS ACCOUNT_LOCATOR,
+    "ORGANIZATION_NAME"                                   AS ORGANIZATION_NAME,
+    "CONTRACT_NUMBER"                                     AS CONTRACT_NUMBER,
+    "REGION"                                              AS REGION,
+    "SERVICE_LEVEL"                                       AS SERVICE_LEVEL,
+    "SERVICE_TYPE"                                        AS SERVICE_TYPE,
+    "USAGE_TYPE"                                          AS USAGE_TYPE,
+    "CURRENCY"                                            AS CURRENCY,
+    CAST("RATE_SHEET_DATE" AS DATE)                       AS RATE_DAY,
+    MONEY("EFFECTIVE_RATE")                               AS EFFECTIVE_RATE,
+    MONEY(CASE WHEN "USAGE_TYPE" = 'compute' THEN "EFFECTIVE_RATE" END)
+                                                          AS COMPUTE_RATE,
+    CASE WHEN "USAGE_TYPE" = 'compute' THEN 1 ELSE 0 END  AS COMPUTE_RATE_ROWS
+  FROM rate_sheet_daily
+dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: >
+      Snowflake account the rate applies to. The view keys on the locator and
+      names the account alongside it, so a row whose ACCOUNT_NAME is absent
+      groups as unknown rather than being attributed by guesswork.
+  - name: account_locator
+    expression: ACCOUNT_LOCATOR
+    description: Account locator — the view's own key for the account.
+  - name: organization
+    expression: ORGANIZATION_NAME
+    description: Organization the contract belongs to.
+  - name: contract
+    expression: COALESCE(CONTRACT_NUMBER, 'UNKNOWN')
+    description: Contract the rate comes from.
+  - name: region
+    expression: REGION
+    description: Cloud region — one of the two things that move a rate.
+  - name: service_level
+    expression: SERVICE_LEVEL
+    description: Snowflake edition — the other thing that moves a rate.
+  - name: usage_type
+    expression: USAGE_TYPE
+    description: What is being priced (compute, storage, data transfer, …).
+  - name: currency
+    expression: CURRENCY
+    description: Contract currency.
+  - name: rate_day
+    expression: RATE_DAY
+    description: Day the rate was in force.

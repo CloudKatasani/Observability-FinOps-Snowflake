@@ -18,6 +18,12 @@ description: >
   function instead of the PERCENTILE shim: Snowflake estimates percentiles from
   a t-digest and DuckDB computes them exactly, and a task-duration tail is far
   too sparse for that difference to be acceptable.
+
+  Every one of those windows is partitioned by the account as well as the task.
+  Task names repeat across a fleet — LOAD_ORDERS exists in four accounts — and
+  without the account each account would inherit the others' failure count and
+  the fleet's newest run as its own freshness baseline. In a single-account lake
+  the account is constant and the partitioning is a no-op.
 sources: [task_history]
 grain: [TASK_NAME, SCHEDULED_AT]
 time_column: SCHEDULED_AT
@@ -38,21 +44,27 @@ sql: |
     EPOCH_SECONDS(TS_PARSE("SCHEDULED_TIME"), TS_PARSE("COMPLETED_TIME"))
                                                           AS DURATION_SEC,
     PERCENT_RANK() OVER (
-      PARTITION BY "NAME"
+      PARTITION BY "NAME", ACCOUNT_OF()
       ORDER BY EPOCH_SECONDS(TS_PARSE("SCHEDULED_TIME"), TS_PARSE("COMPLETED_TIME"))
     )                                                     AS DURATION_PERCENT_RANK,
-    SUM(CASE WHEN "STATE" = 'FAILED' THEN 1 ELSE 0 END) OVER (PARTITION BY "NAME")
-                                                          AS TASK_FAILURE_COUNT,
+    SUM(CASE WHEN "STATE" = 'FAILED' THEN 1 ELSE 0 END)
+      OVER (PARTITION BY "NAME", ACCOUNT_OF())            AS TASK_FAILURE_COUNT,
     MAX(CASE WHEN "STATE" = 'SUCCEEDED' THEN TS_PARSE("COMPLETED_TIME") END)
-      OVER (PARTITION BY "NAME")                          AS LAST_SUCCESS_AT,
-    MAX(TS_PARSE("SCHEDULED_TIME")) OVER ()               AS OBSERVED_THROUGH_AT,
+      OVER (PARTITION BY "NAME", ACCOUNT_OF())            AS LAST_SUCCESS_AT,
+    MAX(TS_PARSE("SCHEDULED_TIME"))
+      OVER (PARTITION BY ACCOUNT_OF())                    AS OBSERVED_THROUGH_AT,
     EPOCH_SECONDS(
       MAX(CASE WHEN "STATE" = 'SUCCEEDED' THEN TS_PARSE("COMPLETED_TIME") END)
-        OVER (PARTITION BY "NAME"),
-      MAX(TS_PARSE("SCHEDULED_TIME")) OVER ()
-    )                                                     AS SECONDS_SINCE_LAST_SUCCESS
+        OVER (PARTITION BY "NAME", ACCOUNT_OF()),
+      MAX(TS_PARSE("SCHEDULED_TIME")) OVER (PARTITION BY ACCOUNT_OF())
+    )                                                     AS SECONDS_SINCE_LAST_SUCCESS,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM task_history
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the task ran in.
   - name: task
     expression: TASK_NAME
     description: Task name.

@@ -70,6 +70,21 @@ class DataUnavailableError(AppError):
     problem_type = "https://snowobs.dev/problems/data-unavailable"
 
 
+class ScopeUnavailableError(AppError):
+    """This metric cannot be answered at the scope that was asked for (R3).
+
+    Distinct from missing data: the source is there, but it does not carry the
+    breakdown requested — a contract balance has no per-account value, and an
+    ACCOUNT_USAGE metric has no single-query organization total in LIVE. The
+    alternative would be answering at a different scope than the one the label
+    claims, which nothing downstream could detect.
+    """
+
+    status_code = 422
+    title = "Metric unavailable at this scope"
+    problem_type = "https://snowobs.dev/problems/scope-unavailable"
+
+
 class DependencyUnavailableError(AppError):
     """A required backing service (database, cache, engine) is unreachable."""
 

@@ -17,11 +17,17 @@ sql: |
     "DATABASE_NAME"                                       AS DATABASE_NAME,
     "SCHEMA_NAME"                                         AS SCHEMA_NAME,
     CAST(TS_TRUNC('day', TS_PARSE("START_TIME")) AS DATE) AS USAGE_DAY,
+    -- The account these rows came from (see the ACCOUNT_OF shim). Grouped on,
+    -- so a lake holding several accounts keeps their task days apart.
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME,
     MONEY(SUM("CREDITS_USED"))                            AS CREDITS_USED,
     COUNT(*)                                              AS RUN_COUNT
   FROM serverless_task_history
-  GROUP BY 1, 2, 3, 4, 5
+  GROUP BY 1, 2, 3, 4, 5, 6
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the task ran in.
   - name: task
     expression: TASK_NAME
     description: Serverless task name.

@@ -31,7 +31,10 @@ WITH product AS (
       (
         CAST(m."CREDITS_USED_COMPUTE" - COALESCE(a.CREDITS_ATTRIBUTED, 0) AS DECIMAL(38, 9))
       ) AS CREDITS_IDLE,
-      r.WAREHOUSE_RANK AS WAREHOUSE_RANK /* Whole-window rank by total compute, so concentration metrics can ask for */ /* "the top N warehouses" without a correlated subquery per row. */
+      r.WAREHOUSE_RANK AS WAREHOUSE_RANK, /* Whole-window rank by total compute, so concentration metrics can ask for */ /* "the top N warehouses" without a correlated subquery per row. */
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'WAREHOUSE_METERING_HISTORY') }} AS m
     LEFT JOIN (
       SELECT
@@ -41,13 +44,17 @@ WITH product AS (
             TRY_TO_TIMESTAMP_NTZ("START_TIME")
           ))
         ) AS ATTRIBUTION_HOUR,
+        (
+          NULL
+        ) AS ACCOUNT_NAME,
         SUM((
           CAST("CREDITS_ATTRIBUTED_COMPUTE" AS DECIMAL(38, 9))
         )) AS CREDITS_ATTRIBUTED
       FROM {{ source('account_usage', 'QUERY_ATTRIBUTION_HISTORY') }}
       GROUP BY
         1,
-        2
+        2,
+        3
     ) AS a
       ON a.WAREHOUSE_NAME = m."WAREHOUSE_NAME"
       AND a.ATTRIBUTION_HOUR = (
@@ -55,15 +62,27 @@ WITH product AS (
           TRY_TO_TIMESTAMP_NTZ(m."START_TIME")
         ))
       )
+      AND COALESCE(a.ACCOUNT_NAME, '') = COALESCE((
+        NULL
+      ), '')
     LEFT JOIN (
       SELECT
         "WAREHOUSE_NAME" AS WAREHOUSE_NAME,
-        DENSE_RANK() OVER (ORDER BY SUM("CREDITS_USED_COMPUTE") DESC NULLS LAST) AS WAREHOUSE_RANK
+        (
+          NULL
+        ) AS ACCOUNT_NAME,
+        DENSE_RANK() OVER (PARTITION BY (
+          NULL
+        ) ORDER BY SUM("CREDITS_USED_COMPUTE") DESC NULLS LAST) AS WAREHOUSE_RANK
       FROM {{ source('account_usage', 'WAREHOUSE_METERING_HISTORY') }}
       GROUP BY
-        1
+        1,
+        2
     ) AS r
       ON r.WAREHOUSE_NAME = m."WAREHOUSE_NAME"
+      AND COALESCE(r.ACCOUNT_NAME, '') = COALESCE((
+        NULL
+      ), '')
   ) AS base
   GROUP BY
     (

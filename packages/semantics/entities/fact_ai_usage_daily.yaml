@@ -13,6 +13,12 @@ description: >
   AI's share of the bill can be stated without a cross-entity join. It is a
   per-day constant, so metrics read it with MAX at day grain — never SUM, which
   would multiply it by the number of function/model pairs.
+
+  Both sides of that join carry the account, and the join matches on it: in a
+  lake holding several accounts, joining on the day alone would pair one
+  account's Cortex usage with the whole fleet's metered credits and understate
+  every AI share. The comparison is null-safe so a single-account lake, where
+  the stamp is absent, still matches.
 sources: [cortex_functions_usage_history, metering_daily_history]
 grain: [FUNCTION_NAME, MODEL_NAME, USAGE_DAY]
 time_column: USAGE_DAY
@@ -24,28 +30,36 @@ sql: |
     u.TOKENS                                              AS TOKENS,
     MONEY(u.TOKEN_CREDITS)                                AS TOKEN_CREDITS,
     u.CALL_COUNT                                          AS CALL_COUNT,
-    MONEY(COALESCE(m.ACCOUNT_CREDITS, 0))                 AS ACCOUNT_CREDITS_DAY
+    MONEY(COALESCE(m.ACCOUNT_CREDITS, 0))                 AS ACCOUNT_CREDITS_DAY,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    u.ACCOUNT_NAME                                        AS ACCOUNT_NAME
   FROM (
     SELECT
       "FUNCTION_NAME"                                     AS FUNCTION_NAME,
       "MODEL_NAME"                                        AS MODEL_NAME,
       CAST(TS_TRUNC('day', TS_PARSE("START_TIME")) AS DATE)
                                                           AS USAGE_DAY,
+      ACCOUNT_OF()                                        AS ACCOUNT_NAME,
       SUM("TOKENS")                                       AS TOKENS,
       MONEY(SUM("TOKEN_CREDITS"))                         AS TOKEN_CREDITS,
       COUNT(*)                                            AS CALL_COUNT
     FROM cortex_functions_usage_history
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
   ) AS u
   LEFT JOIN (
     SELECT
       CAST("USAGE_DATE" AS DATE)                          AS USAGE_DAY,
+      ACCOUNT_OF()                                        AS ACCOUNT_NAME,
       MONEY(SUM("CREDITS_USED"))                          AS ACCOUNT_CREDITS
     FROM metering_daily_history
-    GROUP BY 1
+    GROUP BY 1, 2
   ) AS m
     ON m.USAGE_DAY = u.USAGE_DAY
+   AND COALESCE(m.ACCOUNT_NAME, '') = COALESCE(u.ACCOUNT_NAME, '')
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the Cortex usage was billed to.
   - name: ai_function
     expression: FUNCTION_NAME
     description: Cortex function called (COMPLETE, SUMMARIZE, EMBED_TEXT_768, …).

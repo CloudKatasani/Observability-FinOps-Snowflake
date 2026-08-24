@@ -41,6 +41,14 @@ class SnowflakeTarget:
     service, and the agent so each can be granted independently.
     """
 
+    #: The Snowflake account these artifacts are published into. A published
+    #: view runs inside one account, so the account column its query carries is
+    #: that account — known here as deployment configuration rather than read
+    #: from the data, because `ACCOUNT_USAGE` has no account column to read.
+    #: Left unset, the column renders NULL: honest about not knowing, rather
+    #: than attributing the rows to a guess.
+    account: str | None = None
+
     database: str = "OBSERVABILITY"
     published_schema: str = "PUBLISHED"
     semantic_schema: str = "SEMANTIC"

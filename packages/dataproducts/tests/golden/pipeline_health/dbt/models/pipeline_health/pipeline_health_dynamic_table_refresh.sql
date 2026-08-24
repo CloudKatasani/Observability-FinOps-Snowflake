@@ -111,7 +111,10 @@ WITH product AS (
             TRY_TO_TIMESTAMP_NTZ("REFRESH_END_TIME")
           )
         )
-      ) AS REFRESH_DURATION_SEC
+      ) AS REFRESH_DURATION_SEC,
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'DYNAMIC_TABLE_REFRESH_HISTORY') }}
   ) AS base
   GROUP BY

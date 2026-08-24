@@ -132,7 +132,7 @@ def _view_ddl(
     model: SemanticModel,
     target: SnowflakeTarget,
 ) -> str:
-    compiled = compile_dataset(spec, model=model)
+    compiled = compile_dataset(spec, model=model, account=target.account)
     columns = ",\n".join(
         f"  {ident(column.name)} COMMENT "
         f"{literal(_column_comment(column.description, column.unit))}"

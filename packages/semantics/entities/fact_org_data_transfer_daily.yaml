@@ -1,0 +1,56 @@
+id: fact_org_data_transfer_daily
+name: Organization data transfer (daily)
+kind: fact
+description: >
+  Bytes transferred out of each account per day, by destination and transfer
+  type, from ORGANIZATION_USAGE.DATA_TRANSFER_DAILY_HISTORY. This is the volume
+  side of egress only: the view carries no price, so what a byte cost is
+  answered by the 'data transfer' rows of USAGE_IN_CURRENCY_DAILY (see
+  `org.egress_cost`) or by the rate sheet, never by multiplying here.
+
+  Egress is the line item that surprises people, because nothing inside the
+  account meters it: a replication target in another region and a Snowpipe
+  reading from a foreign bucket both appear only here.
+sources: [data_transfer_daily_history]
+grain: [ACCOUNT_NAME, USAGE_DAY, TRANSFER_TYPE]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    "ACCOUNT_NAME"                                        AS ACCOUNT_NAME,
+    "ORGANIZATION_NAME"                                   AS ORGANIZATION_NAME,
+    "ACCOUNT_LOCATOR"                                     AS ACCOUNT_LOCATOR,
+    "REGION"                                              AS SOURCE_REGION,
+    CAST("USAGE_DATE" AS DATE)                            AS USAGE_DAY,
+    "TRANSFER_TYPE"                                       AS TRANSFER_TYPE,
+    "TARGET_CLOUD"                                        AS TARGET_CLOUD,
+    "TARGET_REGION"                                       AS TARGET_REGION,
+    "BYTES_TRANSFERRED"                                   AS BYTES_TRANSFERRED
+  FROM data_transfer_daily_history
+dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the bytes left.
+  - name: organization
+    expression: ORGANIZATION_NAME
+    description: Organization the account belongs to.
+  - name: transfer_type
+    expression: TRANSFER_TYPE
+    description: What moved the bytes (COPY, REPLICATION, EXTERNAL_ACCESS, …).
+  - name: target_region
+    expression: COALESCE(TARGET_REGION, 'UNKNOWN')
+    description: Region the bytes went to; UNKNOWN when the view does not say.
+  - name: target_cloud
+    expression: COALESCE(TARGET_CLOUD, 'UNKNOWN')
+    description: Cloud the bytes went to; UNKNOWN when the view does not say.
+  - name: transfer_scope
+    expression: >
+      CASE WHEN TARGET_REGION IS NULL THEN 'UNKNOWN'
+           WHEN TARGET_REGION = SOURCE_REGION THEN 'SAME_REGION'
+           ELSE 'CROSS_REGION' END
+    description: >
+      Whether the transfer stayed in the account's own region. Cross-region and
+      cross-cloud egress is priced far above same-region, so this is the slice
+      that explains an egress bill.
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date.

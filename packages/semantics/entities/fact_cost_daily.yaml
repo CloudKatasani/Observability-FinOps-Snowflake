@@ -19,9 +19,14 @@ sql: |
     MONEY("CREDITS_USED_CLOUD_SERVICES" + "CREDITS_ADJUSTMENT_CLOUD_SERVICES")
                                                           AS CREDITS_CLOUD_SERVICES_BILLED,
     MONEY("CREDITS_USED")                                 AS CREDITS_USED,
-    MONEY("CREDITS_BILLED")                               AS CREDITS_BILLED
+    MONEY("CREDITS_BILLED")                               AS CREDITS_BILLED,
+    -- The account these rows came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM metering_daily_history
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the credits were metered in.
   - name: service_type
     expression: SERVICE_TYPE
     description: Snowflake service type (WAREHOUSE_METERING, SERVERLESS_TASK, AI_SERVICES, …).

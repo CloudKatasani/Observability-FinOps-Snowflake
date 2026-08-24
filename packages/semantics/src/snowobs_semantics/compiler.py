@@ -24,6 +24,9 @@ from snowobs_common.errors import AppError
 from snowobs_semantics.dialect_shims import Dialect, apply_shims
 from snowobs_semantics.model import Entity, Metric, SemanticModel, TimeGrain, default_model
 
+#: The dimension every entity uses to name the account a row belongs to.
+ACCOUNT_DIMENSION = "account"
+
 DEFAULT_LIMIT = 10_000
 MAX_LIMIT = 50_000
 TIME_COLUMN_ALIAS = "TIME_BUCKET"
@@ -108,6 +111,14 @@ class MetricRequest(BaseModel):
     #: Row-level security predicates injected server-side (§17) — never from
     #: the browser, and never overridable by a caller-supplied filter.
     rls_filters: list[Filter] = Field(default_factory=list)
+    #: Narrow the answer to one Snowflake account. None means organization
+    #: scope: every account the engine can see, which OFFLINE is every account
+    #: landed in the lake.
+    account: str | None = None
+    #: Which account this query will actually run against, when that is a
+    #: property of the connection rather than of the data (LIVE). The compiler
+    #: renders it into `ACCOUNT_OF()`; OFFLINE ignores it.
+    account_context: str | None = None
 
     @model_validator(mode="after")
     def _sane(self) -> MetricRequest:
@@ -229,7 +240,7 @@ class SemanticCompiler:
         else:
             sql = self._multi_entity_sql(by_entity, request, grain)
 
-        sql = apply_shims(sql, dialect)
+        sql = apply_shims(sql, dialect, account=request.account_context)
         return self._describe(sql, dialect, metrics, request, grain, list(by_entity))
 
     # ------------------------------------------------------------- internals
@@ -273,6 +284,20 @@ class SemanticCompiler:
             predicates.append(
                 f"{column} >= {_literal(request.time_range.start.isoformat())} "
                 f"AND {column} <= {_literal(request.time_range.end.isoformat())}"
+            )
+        # Account scope, when the entity can express it. An entity with no
+        # account dimension is organization-wide by construction — a contract
+        # balance belongs to the organization, not to one of its accounts — so
+        # scoping it to an account would silently return the same figure under
+        # a label saying otherwise. `MetricService` reports that as unavailable
+        # rather than compiling it (R3).
+        if request.account is not None and _has_dimension(self.model, entity, ACCOUNT_DIMENSION):
+            predicates.append(
+                _render_filter(
+                    entity,
+                    self.model,
+                    Filter(dimension=ACCOUNT_DIMENSION, value=request.account),
+                )
             )
         # RLS predicates are applied first and cannot be removed by a caller.
         for filter_ in [*request.rls_filters, *request.filters]:

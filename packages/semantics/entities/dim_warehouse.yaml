@@ -19,9 +19,14 @@ sql: |
     "SCALING_POLICY"                                      AS SCALING_POLICY,
     "OWNER"                                               AS OWNER_ROLE,
     "RESOURCE_MONITOR"                                    AS RESOURCE_MONITOR,
-    "COMMENT"                                             AS WAREHOUSE_COMMENT
+    "COMMENT"                                             AS WAREHOUSE_COMMENT,
+    -- The account this snapshot came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM warehouses
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the warehouse is defined in.
   - name: warehouse
     expression: WAREHOUSE_NAME
     description: Warehouse name.

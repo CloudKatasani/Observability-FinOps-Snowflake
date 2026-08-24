@@ -42,10 +42,18 @@ WITH product AS (
       u."TYPE" AS GRANTEE_TYPE,
       (
         TRY_TO_TIMESTAMP_NTZ(u."LAST_SUCCESS_LOGIN")
-      ) AS GRANTEE_LAST_LOGIN_AT
+      ) AS GRANTEE_LAST_LOGIN_AT,
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'GRANTS_TO_USERS') }} AS g
     LEFT JOIN {{ source('account_usage', 'USERS') }} AS u
       ON u."NAME" = g."GRANTEE_NAME"
+      AND COALESCE((
+        NULL
+      ), '') = COALESCE((
+        NULL
+      ), '')
   ) AS base
   GROUP BY
     (

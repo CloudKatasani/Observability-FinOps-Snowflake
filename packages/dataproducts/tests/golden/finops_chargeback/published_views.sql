@@ -90,7 +90,10 @@ FROM (
     ) AS CREDITS_ATTRIBUTED,
     (
       TRY_TO_TIMESTAMP_NTZ(q."_LOADED_AT")
-    ) AS LANDED_AT /* Landing time: its gap from STARTED_AT is this platform's own freshness. */
+    ) AS LANDED_AT, /* Landing time: its gap from STARTED_AT is this platform's own freshness. */
+    (
+      NULL
+    ) AS ACCOUNT_NAME /* Which account these rows came from. A stamped column OFFLINE, where one */ /* lake holds several accounts; the connection LIVE, where it is not in the */ /* data at all (see the ACCOUNT_OF shim). */
   FROM query_history AS q
   LEFT JOIN query_attribution_history AS a
     ON a."QUERY_ID" = q."QUERY_ID"
@@ -141,7 +144,10 @@ FROM (
     ) AS CREDITS_USED,
     (
       CAST("CREDITS_BILLED" AS DECIMAL(38, 9))
-    ) AS CREDITS_BILLED
+    ) AS CREDITS_BILLED,
+    (
+      NULL
+    ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
   FROM metering_daily_history
 ) AS base
 GROUP BY
@@ -185,7 +191,10 @@ FROM (
     (
       CAST(m."CREDITS_USED_COMPUTE" - COALESCE(a.CREDITS_ATTRIBUTED, 0) AS DECIMAL(38, 9))
     ) AS CREDITS_IDLE,
-    r.WAREHOUSE_RANK AS WAREHOUSE_RANK /* Whole-window rank by total compute, so concentration metrics can ask for */ /* "the top N warehouses" without a correlated subquery per row. */
+    r.WAREHOUSE_RANK AS WAREHOUSE_RANK, /* Whole-window rank by total compute, so concentration metrics can ask for */ /* "the top N warehouses" without a correlated subquery per row. */
+    (
+      NULL
+    ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
   FROM warehouse_metering_history AS m
   LEFT JOIN (
     SELECT
@@ -195,13 +204,17 @@ FROM (
           TRY_TO_TIMESTAMP_NTZ("START_TIME")
         ))
       ) AS ATTRIBUTION_HOUR,
+      (
+        NULL
+      ) AS ACCOUNT_NAME,
       SUM((
         CAST("CREDITS_ATTRIBUTED_COMPUTE" AS DECIMAL(38, 9))
       )) AS CREDITS_ATTRIBUTED
     FROM query_attribution_history
     GROUP BY
       1,
-      2
+      2,
+      3
   ) AS a
     ON a.WAREHOUSE_NAME = m."WAREHOUSE_NAME"
     AND a.ATTRIBUTION_HOUR = (
@@ -209,15 +222,27 @@ FROM (
         TRY_TO_TIMESTAMP_NTZ(m."START_TIME")
       ))
     )
+    AND COALESCE(a.ACCOUNT_NAME, '') = COALESCE((
+      NULL
+    ), '')
   LEFT JOIN (
     SELECT
       "WAREHOUSE_NAME" AS WAREHOUSE_NAME,
-      DENSE_RANK() OVER (ORDER BY SUM("CREDITS_USED_COMPUTE") DESC NULLS LAST) AS WAREHOUSE_RANK
+      (
+        NULL
+      ) AS ACCOUNT_NAME,
+      DENSE_RANK() OVER (PARTITION BY (
+        NULL
+      ) ORDER BY SUM("CREDITS_USED_COMPUTE") DESC NULLS LAST) AS WAREHOUSE_RANK
     FROM warehouse_metering_history
     GROUP BY
-      1
+      1,
+      2
   ) AS r
     ON r.WAREHOUSE_NAME = m."WAREHOUSE_NAME"
+    AND COALESCE(r.ACCOUNT_NAME, '') = COALESCE((
+      NULL
+    ), '')
 ) AS base
 GROUP BY
   (

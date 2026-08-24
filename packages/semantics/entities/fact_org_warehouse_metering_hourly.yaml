@@ -1,0 +1,50 @@
+id: fact_org_warehouse_metering_hourly
+name: Organization warehouse metering (hourly)
+kind: fact
+description: >
+  Warehouse metering for every account in the organization, from
+  ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY. It is the same measurement as
+  the per-account ACCOUNT_USAGE view, published once for the whole fleet and
+  naming the account in its own schema — so it needs no ACCOUNT_OF() stamp and
+  is available to an organization that has landed nothing but its billing
+  export.
+
+  Read it as the roll-up side of the org-versus-accounts reconciliation, not as
+  a replacement for the per-account view: it is a day behind (24 h documented
+  latency against the account view's 3 h) and it carries no warehouse
+  configuration, no queueing, and no query attribution, so nothing about
+  right-sizing or idle time can be answered from here.
+sources: [org_warehouse_metering_history]
+grain: [ACCOUNT_NAME, WAREHOUSE_ID, METERING_HOUR]
+time_column: METERING_HOUR
+sql: |
+  SELECT
+    "ACCOUNT_NAME"                                        AS ACCOUNT_NAME,
+    "ORGANIZATION_NAME"                                   AS ORGANIZATION_NAME,
+    "ACCOUNT_LOCATOR"                                     AS ACCOUNT_LOCATOR,
+    "REGION"                                              AS REGION,
+    "WAREHOUSE_ID"                                        AS WAREHOUSE_ID,
+    "WAREHOUSE_NAME"                                      AS WAREHOUSE_NAME,
+    TS_TRUNC('hour', TS_PARSE("START_TIME"))              AS METERING_HOUR,
+    MONEY("CREDITS_USED")                                 AS CREDITS_USED,
+    MONEY("CREDITS_USED_COMPUTE")                         AS CREDITS_COMPUTE,
+    MONEY("CREDITS_USED_CLOUD_SERVICES")                  AS CREDITS_CLOUD_SERVICES
+  FROM org_warehouse_metering_history
+dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the credits were metered in.
+  - name: organization
+    expression: ORGANIZATION_NAME
+    description: Organization the account belongs to.
+  - name: region
+    expression: REGION
+    description: Cloud region the account runs in.
+  - name: warehouse
+    expression: WAREHOUSE_NAME
+    description: >
+      Warehouse the credits were metered against. Warehouse names repeat across
+      accounts, so this is only unique in combination with the account.
+  - name: metering_hour
+    expression: METERING_HOUR
+    description: Hour of metering.

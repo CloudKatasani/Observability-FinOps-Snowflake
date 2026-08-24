@@ -11,7 +11,7 @@ as *"Unavailable — requires …"* with a remediation, never as a zero (R3).
 The **freshness floor** is the documented latency of the slowest source a KPI
 reads. No surface may imply a figure is fresher than this (R7).
 
-**92 KPIs across 9 domains.**
+**108 KPIs across 10 domains.**
 
 ## Contents
 
@@ -24,6 +24,7 @@ reads. No surface may imply a figure is fresher than this (R7).
 - [D7 — Security, access & governance](#d7-security,-access-governance) (10)
 - [D8 — AI / Cortex & advanced features](#d8-ai-/-cortex-advanced-features) (7)
 - [D9 — Chargeback, budget & commitment](#d9-chargeback,-budget-commitment) (9)
+- [D10 — Organization & multi-account](#d10-organization-multi-account) (16)
 
 ## D1 — Cost & spend
 
@@ -269,7 +270,7 @@ Spend in contract currency from ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY. Valu
 | **Provisional window** | 35 days (restatement) |
 | **Dimensions** | `account`, `usage_day`, `usage_type` |
 | **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` |
-| **Also known as** | spend, dollars, cost in currency, bill |
+| **Also known as** | spend, spending, dollars, cost in currency, bill, how much are we spending |
 
 Verified questions:
 - *spend this month*
@@ -531,7 +532,7 @@ Fraction of queries spilling to storage — the signal that a warehouse is under
 | **Dimensions** | `warehouse`, `warehouse_size` |
 | **Required sources** | `SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY` |
 | **Thresholds** | warn: 0.02, critical: 0.1 |
-| **Also known as** | spilling queries, memory pressure |
+| **Also known as** | spilling queries, queries spill, queries spilling, memory pressure |
 
 #### `wh.utilisation_pct` — Warehouse utilisation
 
@@ -1130,7 +1131,7 @@ Number of distinct tasks that have failed more than once over the retained histo
 | **Owner** | platform |
 | **Dimensions** | `database`, `graph_root`, `task_schema` |
 | **Required sources** | `SNOWFLAKE.ACCOUNT_USAGE.TASK_HISTORY` |
-| **Also known as** | chronic failures, flaky tasks, repeatedly failing tasks |
+| **Also known as** | chronic failures, flaky tasks, repeatedly failing tasks, keep failing, fail again and again |
 
 Verified questions:
 - *tasks that keep failing*
@@ -2027,6 +2028,396 @@ Verified questions:
 - *how much of the allocation is estimated*
 - *unattributed share by warehouse*
 
+## D10 — Organization & multi-account
+
+| KPI | Name | Freshness floor | Direction |
+|---|---|---|---|
+| `org.account_spend` | Spend in currency by account | 3 d | lower is better |
+| `org.account_spend_share` | Account share of organization spend | 3 d | neutral |
+| `org.cloud_services_credits_by_account` | Cloud services credits by account | 1 d | lower is better |
+| `org.commitment_consumed_share` | Commitment consumed | 3 d | neutral |
+| `org.commitment_remaining` | Commitment remaining | 3 d | higher is better |
+| `org.commitment_runway_days` | Commitment runway | 3 d | higher is better |
+| `org.compute_credits_by_account` | Compute credits by account | 1 d | lower is better |
+| `org.contracted_amount` | Contracted amount | 1 d | neutral |
+| `org.control_total_credits` | Organization metered credits (reconciliation control total) | 1 d | lower is better |
+| `org.data_transfer_bytes` | Data transferred out | 1 d | lower is better |
+| `org.effective_credit_rate` | Effective rate per credit | 1 d | lower is better |
+| `org.egress_cost` | Data transfer cost | 3 d | lower is better |
+| `org.rate_premium` | Rate premium against the organization | 1 d | lower is better |
+| `org.spend_currency` | Organization spend in currency | 3 d | lower is better |
+| `org.storage_bytes` | Organization storage | 1 d | neutral |
+| `org.storage_credits` | Organization storage credits | 1 d | lower is better |
+
+#### `org.account_spend` — Spend in currency by account
+
+The same measurement as `org.spend_currency`, named separately because it is read differently: this is the per-account invoice line a business unit is cross-charged from, and the account side of the organization-versus-accounts reconciliation. Keeping both ids means a chargeback statement and its control total each carry their own provenance and latency floor rather than one being silently derived from the other.
+It is not a chargeback allocation: it is what Snowflake billed the account, before any of it is spread over teams. Use D9 for that, and expect the two to differ by whatever the allocation model cannot attribute.
+
+| | |
+|---|---|
+| **Entity** | `fact_spend_currency_daily` |
+| **Expression** | `SUM(SPEND_IN_CURRENCY)` |
+| **Grain** | day |
+| **Format** | currency (USD) |
+| **Direction** | lower is better |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `account`, `currency`, `usage_day`, `usage_type` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` |
+| **Also known as** | spend per account, which account costs the most, account bill, cross-charge |
+
+Verified questions:
+- *spend by account this month*
+- *which account is the most expensive*
+
+#### `org.account_spend_share` — Account share of organization spend
+
+Each row's spend as a fraction of the whole result set's spend. Grouped by account over a period it is the concentration of the bill: four accounts at 25% each is a portfolio, one at 88% is a single point of financial failure.
+The denominator is the *returned* result, not the organization for all time — the shares in one answer always add to 1. Two consequences: reading it with a time bucket gives each account-day's share of the whole period rather than of that day, and reading it under an account filter necessarily gives 1.0, because the filtered account is then the entire denominator. Ask for it at organization scope.
+
+| | |
+|---|---|
+| **Entity** | `fact_spend_currency_daily` |
+| **Expression** | `SAFE_RATIO( SUM(SPEND_IN_CURRENCY), SUM(SUM(SPEND_IN_CURRENCY)) OVER () )` |
+| **Grain** | day |
+| **Format** | percent |
+| **Direction** | neutral |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `account`, `currency`, `usage_day`, `usage_type` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` |
+| **Also known as** | share of spend, percentage of the bill, spend concentration, who spends the most |
+
+Verified questions:
+- *what share of spend is each account*
+- *how concentrated is our spend*
+
+#### `org.cloud_services_credits_by_account` — Cloud services credits by account
+
+Raw cloud-services credits per account — compilation, metadata, result cache lookups, and the like. These are the credits before Snowflake's daily 10% rebate, so this is what the workload *used*, not what it was billed; the billed figure lives in D1 against the account's own metering.
+An account whose cloud-services credits run well above a tenth of its compute is running something pathological — thousands of tiny queries, or a BI tool re-describing the same tables all day — and is paying for it.
+
+| | |
+|---|---|
+| **Entity** | `fact_org_warehouse_metering_hourly` |
+| **Expression** | `SUM(CREDITS_CLOUD_SERVICES)` |
+| **Grain** | day |
+| **Format** | number (credits) |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Dimensions** | `account`, `organization`, `region`, `warehouse` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY` |
+| **Also known as** | cloud services by account, metadata credits per account |
+
+Verified questions:
+- *cloud services credits by account*
+- *which account has the most metadata overhead*
+
+#### `org.commitment_consumed_share` — Commitment consumed
+
+How much of the contracted total has been drawn down, as a fraction: the burn-down expressed against the size of the commitment rather than in dollars, so a renewal conversation can be had in one number. Consumption only rises, so the maximum over the window is the position at the end of it.
+Read it against elapsed contract term, never alone. Sixty per cent consumed is comfortable half way through a term and a problem three months in — and on the other side, a commitment tracking well *under* term is money already spent that will expire unused, which is the more common and more expensive mistake.
+
+| | |
+|---|---|
+| **Entity** | `fact_commitment_balance_daily` |
+| **Expression** | `SAFE_RATIO(MAX(COMMITMENT_CONSUMED), MAX(COMMITMENT_TOTAL))` |
+| **Grain** | day |
+| **Format** | percent |
+| **Direction** | neutral |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `balance_day`, `commitment_state`, `contract`, `currency`, `organization` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY`, `SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS` |
+| **Also known as** | commitment burn, how much of the contract have we used, capacity consumed, drawdown |
+
+Verified questions:
+- *how much of the commitment have we used*
+- *commitment burn by contract*
+
+#### `org.commitment_remaining` — Commitment remaining
+
+Free usage, rollover, and capacity still unspent: what is left before usage starts being billed on demand at list price. Taken as the minimum over the requested window, which is the balance at the end of it — a commitment drawdown only falls, so the smallest reading in a window is the latest one.
+Summing it would be meaningless, and so would averaging it. With more than one contract in scope the minimum is the smallest contract's balance rather than the group's total, so slice by `contract` whenever an organization holds several. Balances restate until month close.
+
+| | |
+|---|---|
+| **Entity** | `fact_commitment_balance_daily` |
+| **Expression** | `MIN(COMMITMENT_REMAINING)` |
+| **Grain** | day |
+| **Format** | currency (USD) |
+| **Direction** | higher is better |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `balance_day`, `commitment_state`, `contract`, `currency`, `organization` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY` |
+| **Also known as** | remaining balance, capacity left, how much commitment is left, unused commitment |
+
+Verified questions:
+- *how much commitment is left*
+- *remaining balance on the contract*
+
+#### `org.commitment_runway_days` — Commitment runway
+
+Days of commitment left at the run rate observed in the window: the balance at the end of the window divided by the mean daily drawdown within it. It is the figure that turns a burn-down chart into a date, and the one a renewal or a spend freeze is argued from.
+It is an extrapolation of the past, not a forecast: it assumes the observed run rate continues exactly, so a window containing a migration or a quiet fortnight gives a runway that says more about the window than about the future. Compare it with the days left on the contract term — a runway shorter than the term means on-demand billing before renewal, and a runway far longer means commitment that will expire unspent. When the window shows no drawdown at all the answer is unknown, not infinite, and the metric returns null rather than a number (R3).
+
+| | |
+|---|---|
+| **Entity** | `fact_commitment_balance_daily` |
+| **Expression** | `SAFE_RATIO( MIN(COMMITMENT_REMAINING), SAFE_RATIO(SUM(COMMITMENT_DRAW), COUNT(COMMITMENT_DRAW)) )` |
+| **Grain** | day |
+| **Format** | number (days) |
+| **Direction** | higher is better |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `balance_day`, `commitment_state`, `contract`, `currency`, `organization` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY` |
+| **Thresholds** | warn: 90.0, critical: 30.0 |
+| **Also known as** | runway, days of commitment left, when do we run out, burn rate runway |
+
+Verified questions:
+- *how long will the commitment last*
+- *when do we run out of capacity*
+
+#### `org.compute_credits_by_account` — Compute credits by account
+
+Virtual-warehouse compute credits per account, excluding cloud services. This is the fleet's workload in the one unit that is comparable across accounts: currency is not, because two accounts on different editions and regions pay different money for the same work (see `org.effective_credit_rate`).
+Sliced by warehouse it names the workload; but warehouse names repeat across accounts, so a warehouse slice without the account beside it merges four different TRANSFORM_WHs into one meaningless row.
+
+| | |
+|---|---|
+| **Entity** | `fact_org_warehouse_metering_hourly` |
+| **Expression** | `SUM(CREDITS_COMPUTE)` |
+| **Grain** | day |
+| **Format** | number (credits) |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Dimensions** | `account`, `organization`, `region`, `warehouse` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY` |
+| **Also known as** | credits by account, compute per account, who is burning credits |
+
+Verified questions:
+- *compute credits by account last week*
+- *which account burns the most credits*
+
+#### `org.contracted_amount` — Contracted amount
+
+The money on the contract, by line item: capacity purchased, rollover carried in from the previous term, and free usage granted. Added up per contract it is the commitment the organization is drawing down, and the denominator of `org.commitment_consumed_share`.
+It is a snapshot of the contract as it stands *now*. An amendment restates the rows rather than versioning them, so this metric cannot answer what the contract said last quarter, and it carries no account dimension because a contract belongs to the organization rather than to any account under it.
+
+| | |
+|---|---|
+| **Entity** | `dim_contract_item` |
+| **Expression** | `SUM(AMOUNT)` |
+| **Grain** | day |
+| **Format** | currency (USD) |
+| **Direction** | neutral |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Dimensions** | `contract`, `contract_item`, `currency`, `organization` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS` |
+| **Also known as** | contract value, capacity purchased, commitment size, what did we commit to |
+
+Verified questions:
+- *what is our contract worth*
+- *capacity purchased by contract*
+
+#### `org.control_total_credits` — Organization metered credits (reconciliation control total)
+
+Warehouse credits for the whole fleet, as the organization roll-up publishes them. It exists to be compared: ORGANIZATION_USAGE is derived from the same metering the accounts see in their own ACCOUNT_USAGE, so requesting this alongside an account-side credit metric puts both totals in one answer and any difference is either a missing extract or a landing problem — never a difference of opinion about what a credit is.
+It is a day behind the account view and covers virtual-warehouse compute only: serverless, AI services, and storage credits are not in it, so it is smaller than the account's total metered credits by exactly those, and the two reconcile only when compared like for like.
+
+| | |
+|---|---|
+| **Entity** | `fact_org_warehouse_metering_hourly` |
+| **Expression** | `SUM(CREDITS_USED)` |
+| **Grain** | day |
+| **Format** | number (credits) |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Dimensions** | `account`, `organization`, `region`, `warehouse` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY` |
+| **Also known as** | organization credits, fleet credits, control total, org rollup credits |
+
+Verified questions:
+- *organization credits by account*
+- *does the org rollup match the accounts*
+
+#### `org.data_transfer_bytes` — Data transferred out
+
+Bytes leaving each account per day, by destination and transfer type. It is the volume behind `org.egress_cost`, and the two must be read together: bytes are free within a region and expensive across a cloud boundary, so a tenfold rise in bytes can cost nothing and a modest rise can cost a great deal. `transfer_scope` is the slice that tells them apart.
+The view sees transfer Snowflake charges for. Traffic that never leaves the region, and reads by a consumer in a data share, do not appear — an absence here is not proof that nothing moved.
+
+| | |
+|---|---|
+| **Entity** | `fact_org_data_transfer_daily` |
+| **Expression** | `SUM(BYTES_TRANSFERRED)` |
+| **Grain** | day |
+| **Format** | bytes |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Dimensions** | `account`, `target_cloud`, `target_region`, `transfer_scope`, `transfer_type`, `usage_day` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.DATA_TRANSFER_DAILY_HISTORY` |
+| **Also known as** | egress bytes, data transfer volume, replication traffic, who is egressing |
+
+Verified questions:
+- *how much data left the organization*
+- *egress bytes by account*
+
+#### `org.effective_credit_rate` — Effective rate per credit
+
+What one compute credit actually costs an account, from the contracted rate sheet: the mean of the daily 'compute' rate over the rows in the answer. This is the figure that explains a bill nobody can explain from usage — two accounts running identical workloads can differ by half again on edition and region alone, and a rate outlier is worth more than most optimisation work because it applies to every credit the account will ever burn.
+Overage rates are excluded: they price consumption past a commitment, are far higher, and blending them in would produce a number matching no line of the invoice. Rates restate when a contract is amended, and amendments are backdated — a rate read for a past month can change.
+
+| | |
+|---|---|
+| **Entity** | `fact_rate_sheet_daily` |
+| **Expression** | `SAFE_RATIO(SUM(COMPUTE_RATE), SUM(COMPUTE_RATE_ROWS))` |
+| **Grain** | day |
+| **Format** | currency (USD) |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Dimensions** | `account`, `contract`, `currency`, `rate_day`, `region`, `service_level` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.RATE_SHEET_DAILY` |
+| **Also known as** | price per credit, credit rate, effective rate, what do we pay per credit, unit price |
+
+Verified questions:
+- *what do we pay per credit*
+- *effective rate by account*
+- *which account pays most per credit*
+
+#### `org.egress_cost` — Data transfer cost
+
+What the organization paid for bytes leaving its accounts, taken from the 'data transfer' rows of the billing view rather than by pricing bytes ourselves. Egress is the line nobody forecasts: it is invisible inside the account that causes it, it is charged per terabyte at rates that multiply when a target leaves the region or the cloud, and it is usually a replication topology that nobody has revisited since it was set up.
+A zero here is a real zero — no charged transfer — and not a missing source; if the billing view has not landed at all, the metric reports unavailable rather than nil (R3). Pair it with `org.data_transfer_bytes` to see whether a rise is more traffic or dearer traffic.
+
+| | |
+|---|---|
+| **Entity** | `fact_spend_currency_daily` |
+| **Expression** | `SUM(CASE WHEN USAGE_TYPE = 'data transfer' THEN SPEND_IN_CURRENCY ELSE 0 END)` |
+| **Grain** | day |
+| **Format** | currency (USD) |
+| **Direction** | lower is better |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `account`, `currency`, `usage_day` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` |
+| **Also known as** | egress cost, data transfer bill, replication cost, what is egress costing us |
+
+Verified questions:
+- *what is egress costing us*
+- *data transfer cost by account*
+
+#### `org.rate_premium` — Rate premium against the organization
+
+An account's effective credit rate divided by the organization's — 1.0 is the fleet average, 1.4 means this account pays forty per cent more for the same credit. It is the detector for the rate outlier: an account provisioned in a distant region or on a higher edition than its workload needs, quietly inflating every credit it burns.
+The denominator is the mean rate across the *returned* rows, so it answers "dear compared to whom" only as widely as the question was asked: filtered to one account it is 1.0 by construction. A premium is not automatically wrong — Business Critical costs more because it is worth more to that workload — it is a question to answer, and the answer belongs next to the number.
+
+| | |
+|---|---|
+| **Entity** | `fact_rate_sheet_daily` |
+| **Expression** | `SAFE_RATIO( SAFE_RATIO(SUM(COMPUTE_RATE), SUM(COMPUTE_RATE_ROWS)), SAFE_RATIO( SUM(SUM(COMPUTE_RATE)) OVER (), SUM(SUM(COMPUTE_RATE_ROWS)) OVER () ) )` |
+| **Grain** | day |
+| **Format** | number (×) |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Dimensions** | `account`, `contract`, `currency`, `rate_day`, `region`, `service_level` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.RATE_SHEET_DAILY` |
+| **Thresholds** | warn: 1.15, critical: 1.3 |
+| **Also known as** | rate outlier, who pays more per credit, price premium, rate comparison |
+
+Verified questions:
+- *which account pays above the average rate*
+- *rate premium by account*
+
+#### `org.spend_currency` — Organization spend in currency
+
+Every account's spend in contract currency, added up: the organization's bill. It is the only figure in the platform denominated in money across the whole fleet, and the one a finance system reconciles against.
+It misleads in two ways. Values restate until month close, so the last five weeks are provisional and must not be posted as final. And it sums across currencies if a group holds contracts in more than one — slice by `currency` before believing a total from a multi-currency organization.
+
+| | |
+|---|---|
+| **Entity** | `fact_spend_currency_daily` |
+| **Expression** | `SUM(SPEND_IN_CURRENCY)` |
+| **Grain** | day |
+| **Format** | currency (USD) |
+| **Direction** | lower is better |
+| **Freshness floor** | 3 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Provisional window** | 35 days (restatement) |
+| **Dimensions** | `account`, `currency`, `usage_day`, `usage_type` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.USAGE_IN_CURRENCY_DAILY` |
+| **Also known as** | organization spend, fleet spend, total bill, group spend, what does the whole organization cost |
+
+Verified questions:
+- *what did the organization spend last month*
+- *total spend across all accounts*
+
+#### `org.storage_bytes` — Organization storage
+
+Average bytes stored per day, summed across the accounts in the answer: the organization's data footprint. It includes active, Time Travel, and Fail-safe bytes as the billing view counts them, which is why it is larger than the sum of what anyone thinks their tables hold.
+AVERAGE_BYTES is an average *over* a day, so it is summed across accounts and read across days — never summed across days, which would report a fortnight of storage as fourteen times the footprint.
+
+| | |
+|---|---|
+| **Entity** | `fact_org_storage_daily` |
+| **Expression** | `SUM(AVERAGE_BYTES)` |
+| **Grain** | day |
+| **Format** | bytes |
+| **Direction** | neutral |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Dimensions** | `account`, `organization`, `region`, `usage_day` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY` |
+| **Also known as** | organization storage, fleet storage, total bytes stored, how much data do we hold |
+
+Verified questions:
+- *how much storage does the organization hold*
+- *storage by account*
+
+#### `org.storage_credits` — Organization storage credits
+
+What the fleet's storage costs, in credits, as the organization view bills it. Storage is priced per terabyte-month by region, so an account in a dear region pays more for the same bytes — slice by `region` before concluding that one account is wasteful rather than merely distant.
+Storage credits are usually a small share of a Snowflake bill and are the slowest-moving part of it: a change here is a retention or clone decision, never a query.
+
+| | |
+|---|---|
+| **Entity** | `fact_org_storage_daily` |
+| **Expression** | `SUM(STORAGE_CREDITS)` |
+| **Grain** | day |
+| **Format** | number (credits) |
+| **Direction** | lower is better |
+| **Freshness floor** | 1 d |
+| **Owner** | finops |
+| **Allocation method** | metered |
+| **Dimensions** | `account`, `organization`, `region`, `usage_day` |
+| **Required sources** | `SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY` |
+| **Also known as** | storage credits, cost of storage, what is storage costing |
+
+Verified questions:
+- *storage credits by account*
+- *what is storage costing the organization*
+
 ## Portability shims
 
 Constructs that do not express identically in both engines are translated by a
@@ -2035,6 +2426,7 @@ never forked per engine (R1).
 
 | Shim | Purpose |
 |---|---|
+| `ACCOUNT_OF` | The Snowflake account a row belongs to. A stamped column OFFLINE, where one lake holds several accounts; the connection LIVE, where it is not in the data at all. |
 | `DATE_DIFF_DAYS` | Whole days between two dates/timestamps. |
 | `EPOCH_SECONDS` | Whole seconds between two timestamps. |
 | `JSON_GET` | Read a top-level string field from a JSON/VARIANT column. |

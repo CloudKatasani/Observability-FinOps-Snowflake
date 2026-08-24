@@ -7,9 +7,11 @@ description: >
   restricted in the source registry and no metric in this layer needs it (§12.5).
 
   DAYS_SINCE_LAST_LOGIN is measured against SNAPSHOT_AT — the newest successful
-  login anywhere in the snapshot — rather than wall-clock time. That keeps the
-  dormancy cohort reproducible across runs and honest about what the snapshot
-  can actually see: an account with no logins at all cannot be aged.
+  login in the same Snowflake account — rather than wall-clock time. That keeps
+  the dormancy cohort reproducible across runs and honest about what the
+  snapshot can actually see: a user with no logins at all cannot be aged. It is
+  per account rather than fleet-wide because a quiet account's users would
+  otherwise all read as dormant against a busier account's newest login.
 sources: [users]
 grain: [USER_NAME]
 scd: type2
@@ -27,16 +29,22 @@ sql: |
     TS_PARSE("LAST_SUCCESS_LOGIN")                        AS LAST_SUCCESS_LOGIN_AT,
     TS_PARSE("CREATED_ON")                                AS CREATED_AT,
     TS_PARSE("DELETED_ON")                                AS DELETED_AT,
-    MAX(TS_PARSE("LAST_SUCCESS_LOGIN")) OVER ()           AS SNAPSHOT_AT,
+    MAX(TS_PARSE("LAST_SUCCESS_LOGIN"))
+      OVER (PARTITION BY ACCOUNT_OF())                    AS SNAPSHOT_AT,
     SAFE_RATIO(
       EPOCH_SECONDS(
         TS_PARSE("LAST_SUCCESS_LOGIN"),
-        MAX(TS_PARSE("LAST_SUCCESS_LOGIN")) OVER ()
+        MAX(TS_PARSE("LAST_SUCCESS_LOGIN")) OVER (PARTITION BY ACCOUNT_OF())
       ),
       86400
-    )                                                     AS DAYS_SINCE_LAST_LOGIN
+    )                                                     AS DAYS_SINCE_LAST_LOGIN,
+    -- The account this snapshot came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM users
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the user belongs to.
   - name: user
     expression: USER_NAME
     description: User name.

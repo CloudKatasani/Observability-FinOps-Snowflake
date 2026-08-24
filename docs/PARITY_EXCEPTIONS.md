@@ -17,7 +17,7 @@ entry names a real metric and carries a written justification.
 | Check | What it proves | When it runs |
 |---|---|---|
 | **Executed parity** | The Snowflake-dialect SQL the platform would send produces the same numbers as the DuckDB-dialect SQL, on the same rows | Every commit |
-| **Golden SQL snapshots** | Neither rendering changed unintentionally (184 files: 92 metrics × 2 dialects) | Every commit |
+| **Golden SQL snapshots** | Neither rendering changed unintentionally (216 files: 108 metrics × 2 dialects) | Every commit |
 | **Live comparison** | The Snowflake SQL behaves identically on a real account | Nightly, `pytest -m snowflake` |
 
 Executed parity runs the real Snowflake-dialect SQL against the fixture data. The few

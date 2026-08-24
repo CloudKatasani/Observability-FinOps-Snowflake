@@ -44,7 +44,9 @@ WITH product AS (
       ) AS DELETED_AT,
       MAX((
         TRY_TO_TIMESTAMP_NTZ("LAST_SUCCESS_LOGIN")
-      )) OVER () AS SNAPSHOT_AT,
+      )) OVER (PARTITION BY (
+        NULL
+      )) AS SNAPSHOT_AT,
       (
         CAST(CASE
           WHEN (
@@ -62,14 +64,19 @@ WITH product AS (
                 ),
                 MAX((
                   TRY_TO_TIMESTAMP_NTZ("LAST_SUCCESS_LOGIN")
-                )) OVER ()
+                )) OVER (PARTITION BY (
+                  NULL
+                ))
               )
             )
           ) AS DECIMAL(38, 15)) / CAST((
             86400
           ) AS DECIMAL(38, 15))
         END AS DECIMAL(38, 15))
-      ) AS DAYS_SINCE_LAST_LOGIN
+      ) AS DAYS_SINCE_LAST_LOGIN,
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account this snapshot came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'USERS') }}
   ) AS base
   GROUP BY

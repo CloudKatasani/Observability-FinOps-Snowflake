@@ -46,7 +46,10 @@ WITH product AS (
       "SECOND_AUTHENTICATION_FACTOR" AS SECOND_AUTH_FACTOR,
       "IS_SUCCESS" AS IS_SUCCESS,
       "ERROR_CODE" AS ERROR_CODE,
-      "ERROR_MESSAGE" AS ERROR_MESSAGE
+      "ERROR_MESSAGE" AS ERROR_MESSAGE,
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'LOGIN_HISTORY') }}
   ) AS base
   GROUP BY

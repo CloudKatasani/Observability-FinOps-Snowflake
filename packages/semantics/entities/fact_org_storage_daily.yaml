@@ -1,0 +1,40 @@
+id: fact_org_storage_daily
+name: Organization storage (daily)
+kind: fact
+description: >
+  Daily average stored bytes and the storage credits they cost, per account,
+  from ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY. AVERAGE_BYTES is an average
+  over the day, not an end-of-day reading, so summing it across days is
+  meaningless — it is summed across *accounts* to give the organization
+  footprint on a day, and read per day over time to give the trend.
+
+  The account-scoped storage views (DATABASE_STORAGE_USAGE_HISTORY,
+  TABLE_STORAGE_METRICS) are what say *which database or table* the footprint
+  is in; this view says only how much and whose. Landing both is what turns
+  "the fleet grew 12 TB" into "and it was ANALYTICS.RAW that did it".
+sources: [storage_daily_history]
+grain: [ACCOUNT_NAME, USAGE_DAY]
+time_column: USAGE_DAY
+sql: |
+  SELECT
+    "ACCOUNT_NAME"                                        AS ACCOUNT_NAME,
+    "ORGANIZATION_NAME"                                   AS ORGANIZATION_NAME,
+    "ACCOUNT_LOCATOR"                                     AS ACCOUNT_LOCATOR,
+    "REGION"                                              AS REGION,
+    CAST("USAGE_DATE" AS DATE)                            AS USAGE_DAY,
+    "AVERAGE_BYTES"                                       AS AVERAGE_BYTES,
+    MONEY("CREDITS")                                      AS STORAGE_CREDITS
+  FROM storage_daily_history
+dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the storage belongs to.
+  - name: organization
+    expression: ORGANIZATION_NAME
+    description: Organization the account belongs to.
+  - name: region
+    expression: REGION
+    description: Cloud region the storage sits in — the unit storage is priced by.
+  - name: usage_day
+    expression: USAGE_DAY
+    description: Usage date.

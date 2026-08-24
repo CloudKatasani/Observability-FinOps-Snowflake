@@ -40,9 +40,14 @@ sql: |
     SAFE_RATIO(
       EPOCH_SECONDS(TS_PARSE("TABLE_CREATED"), TS_PARSE("_LOADED_AT")),
       86400
-    )                                                     AS DAYS_SINCE_LAST_CHANGE
+    )                                                     AS DAYS_SINCE_LAST_CHANGE,
+    -- The account this snapshot came from (see the ACCOUNT_OF shim).
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME
   FROM table_storage_metrics
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the table lives in.
   - name: table
     expression: TABLE_NAME
     description: Table name.

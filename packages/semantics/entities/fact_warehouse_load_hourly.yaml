@@ -13,14 +13,21 @@ sql: |
   SELECT
     "WAREHOUSE_NAME"                                      AS WAREHOUSE_NAME,
     TS_TRUNC('hour', TS_PARSE("START_TIME"))              AS LOAD_HOUR,
+    -- The account these rows came from (see the ACCOUNT_OF shim). Grouped on,
+    -- so two accounts running a warehouse of the same name in the same hour
+    -- stay two rows rather than one merged average.
+    ACCOUNT_OF()                                          AS ACCOUNT_NAME,
     COUNT(*)                                              AS QUERY_COUNT,
     SUM("QUEUED_OVERLOAD_TIME")                           AS QUEUED_OVERLOAD_MS,
     SUM("QUEUED_PROVISIONING_TIME")                       AS QUEUED_PROVISIONING_MS,
     SUM("TOTAL_ELAPSED_TIME")                             AS ELAPSED_MS,
     SUM("EXECUTION_TIME")                                 AS EXECUTION_MS
   FROM query_history
-  GROUP BY 1, 2
+  GROUP BY 1, 2, 3
 dimensions:
+  - name: account
+    expression: ACCOUNT_NAME
+    description: Snowflake account the load was observed in.
   - name: warehouse
     expression: WAREHOUSE_NAME
     description: Warehouse the load was observed on.

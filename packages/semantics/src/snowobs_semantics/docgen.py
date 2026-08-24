@@ -26,6 +26,7 @@ DOMAIN_TITLES: dict[str, str] = {
     "security": "D7 — Security, access & governance",
     "ai": "D8 — AI / Cortex & advanced features",
     "chargeback": "D9 — Chargeback, budget & commitment",
+    "organization": "D10 — Organization & multi-account",
 }
 
 

@@ -125,6 +125,57 @@ def _regex_contains_duckdb(args: list[str]) -> str:
     return f"regexp_matches({args[0]}, {args[1]})"
 
 
+#: Snowflake account and organization names are identifiers: letters, digits,
+#: underscores and hyphens. Anything else reaching the account literal is
+#: rejected outright rather than escaped.
+_SAFE_ACCOUNT = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_\-]{0,254}$")
+
+
+def _vet_account(account: str) -> str:
+    if not _SAFE_ACCOUNT.match(account):
+        raise ShimError(
+            f"Unsafe account name {account!r}. Account names are Snowflake "
+            "identifiers: letters, digits, underscores and hyphens."
+        )
+    return account
+
+
+#: What OFFLINE ingest stamps on every landed row, recording which account the
+#: extract came from. `ACCOUNT_USAGE` views carry no account column of their
+#: own — a real extract cannot, since it is taken from inside one account — so
+#: this is the platform's record rather than Snowflake's.
+ACCOUNT_STAMP_COLUMN = '"_ACCOUNT"'
+
+
+def _account_of_duckdb(args: list[str]) -> str:
+    """The stamped column, qualified by a table alias when one is given.
+
+    An entity that joins two landed tables has the stamp on both, so the bare
+    column is ambiguous — `fact_query_execution` joins query history to its
+    attribution and DuckDB rejected the reference outright. Entities with a
+    join name the side to read it from; single-table entities need no alias.
+    """
+    if not args:
+        return ACCOUNT_STAMP_COLUMN
+    return f"{args[0]}.{ACCOUNT_STAMP_COLUMN}"
+
+
+def _account_of_snowflake(args: list[str]) -> str:
+    """Unknown until the compiler says which account this query is running in.
+
+    The table alias an OFFLINE rendering needs is irrelevant here and ignored:
+    LIVE has no stamped column on either side of a join to disambiguate.
+
+    In LIVE the account is a property of the *connection*, not of the data, so
+    there is nothing in the row to read it from. The compiler substitutes the
+    connected account as a literal; without that context the honest answer is
+    NULL, which groups and filters as "unknown" rather than silently attributing
+    every row to one account.
+    """
+    del args
+    return "NULL"
+
+
 def _date_diff_days_snowflake(args: list[str]) -> str:
     """Whole days from ``args[0]`` to ``args[1]``.
 
@@ -204,6 +255,19 @@ SHIMS: dict[str, Shim] = {
             Dialect.DUCKDB: _date_diff_days_duckdb,
         },
         description="Whole days between two dates/timestamps.",
+    ),
+    "ACCOUNT_OF": Shim(
+        name="ACCOUNT_OF",
+        arity=(0, 1),
+        render={
+            Dialect.SNOWFLAKE: _account_of_snowflake,
+            Dialect.DUCKDB: _account_of_duckdb,
+        },
+        description=(
+            "The Snowflake account a row belongs to. A stamped column OFFLINE, "
+            "where one lake holds several accounts; the connection LIVE, where "
+            "it is not in the data at all."
+        ),
     ),
     "EPOCH_SECONDS": Shim(
         name="EPOCH_SECONDS",
@@ -329,12 +393,34 @@ def _positional_probe_arguments(name: str, count: int) -> list[str]:
 _MAX_SHIM_PASSES = 8
 
 
-def apply_shims(sql: str, dialect: Dialect) -> str:
+def apply_shims(sql: str, dialect: Dialect, *, account: str | None = None) -> str:
     """Rewrite every shim call in a SQL fragment for the target dialect.
 
     Parsing is done with SQLGlot so a shim name inside a string literal or an
     identifier is never rewritten by accident.
+
+    ``account`` names the Snowflake account this query will run against, which
+    only LIVE needs: there the account is the connection rather than a column,
+    so ``ACCOUNT_OF()`` has nothing in the row to read and is rendered as the
+    literal instead. OFFLINE ignores it and reads the stamped column, because a
+    single lake can hold several accounts at once.
     """
+    shims = dict(SHIMS)
+    if account is not None:
+        # Vetted rather than escaped. Escaping by hand and then handing the
+        # result back to the parser double-escapes it, and an account name is a
+        # Snowflake identifier — there is no legitimate value here that needs
+        # quoting, so anything that would is a bug or an attack (R9).
+        literal = "'" + _vet_account(account) + "'"
+        shims["ACCOUNT_OF"] = Shim(
+            name="ACCOUNT_OF",
+            arity=(0, 1),
+            render={
+                Dialect.SNOWFLAKE: lambda _args: literal,
+                Dialect.DUCKDB: _account_of_duckdb,
+            },
+            description=SHIMS["ACCOUNT_OF"].description,
+        )
     try:
         expression = _parse(sql)
     except Exception as exc:
@@ -342,7 +428,7 @@ def apply_shims(sql: str, dialect: Dialect) -> str:
 
     def transform(node: exp.Expression) -> exp.Expression:
         if isinstance(node, exp.Anonymous):
-            shim = SHIMS.get(str(node.this).upper())
+            shim = shims.get(str(node.this).upper())
             if shim is not None:
                 args = [arg.sql(dialect=dialect.value) for arg in node.expressions]
                 low, high = shim.arity

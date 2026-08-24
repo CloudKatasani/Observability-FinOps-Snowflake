@@ -331,6 +331,38 @@ All notable changes to this project are documented here. The format follows
   `CoverageMatrix.account_matrix(account)` — so "account X has query history
   landed, account Y only has billing" is a reportable answer. The existing
   single-account shape is unchanged, with an empty per-account list.
+- **The `account` dimension on every entity.** All nineteen account-bearing
+  entities now project an account and declare an `account` dimension, so every
+  KPI in the catalogue can be read at organization level or narrowed to one
+  account. Account-scoped entities take it from the `ACCOUNT_OF()` shim — the
+  ingest stamp OFFLINE, the connected account LIVE; organization-scoped
+  entities keep the real `ACCOUNT_NAME` the view publishes. `dim_contract_item`
+  and `fact_commitment_balance_daily` deliberately have none: a contract belongs
+  to the organization, and the compiler skips the account predicate for them
+  rather than labelling an organization figure with an account's name (R3).
+- **Six organization entities**: `fact_org_warehouse_metering_hourly`,
+  `fact_org_storage_daily`, `fact_org_data_transfer_daily`,
+  `fact_rate_sheet_daily`, `dim_contract_item`, and
+  `fact_commitment_balance_daily` — covering the six ORGANIZATION_USAGE views
+  that had no entity, joining the contract total onto the daily balance so the
+  burn-down can be stated as a share rather than as bare dollars.
+- **D10 — Organization & multi-account**: 16 KPIs. Organization spend and spend
+  by account, an account's share of the bill, egress cost and egress volume, the
+  org-roll-up control total and compute/cloud-services credits per account,
+  organization storage in bytes and credits, the effective rate per credit and
+  the premium an account pays against the fleet, the contracted amount, and the
+  commitment triple — remaining, consumed share, and runway in days. The
+  catalogue is now **108 KPIs across ten domains**; every one of them is
+  parity-tested in both dialects with no new tolerance.
+- **Account-aware joins and windows inside account-scoped entities.** Warehouse
+  names, user names, task names, and dates all repeat across a fleet, so
+  `fact_warehouse_metering_hourly`, `fact_storage_daily`, `fact_grant`,
+  `fact_ai_usage_daily`, `fact_task_run`, `fact_serverless_daily`,
+  `fact_warehouse_load_hourly`, and `dim_user` now carry the account in their
+  join keys, group keys, and window partitions. Without it a four-account lake
+  multiplied one account's credits by four, and one account's task failures were
+  counted as another's — silently, and only in a multi-account lake (A-33). A
+  single-account lake is bit-for-bit unaffected.
 
 ### Fixed
 

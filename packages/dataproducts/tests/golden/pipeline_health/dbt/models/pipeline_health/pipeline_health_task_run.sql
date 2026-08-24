@@ -64,7 +64,9 @@ WITH product AS (
         )
       ) AS DURATION_SEC,
       PERCENT_RANK() OVER (
-        PARTITION BY "NAME"
+        PARTITION BY "NAME", (
+          NULL
+        )
         ORDER BY (
           DATEDIFF(
             SECOND,
@@ -77,7 +79,9 @@ WITH product AS (
           )
         )
       ) AS DURATION_PERCENT_RANK,
-      SUM(CASE WHEN "STATE" = 'FAILED' THEN 1 ELSE 0 END) OVER (PARTITION BY "NAME") AS TASK_FAILURE_COUNT,
+      SUM(CASE WHEN "STATE" = 'FAILED' THEN 1 ELSE 0 END) OVER (PARTITION BY "NAME", (
+        NULL
+      )) AS TASK_FAILURE_COUNT,
       MAX(
         CASE
           WHEN "STATE" = 'SUCCEEDED'
@@ -85,10 +89,14 @@ WITH product AS (
             TRY_TO_TIMESTAMP_NTZ("COMPLETED_TIME")
           )
         END
-      ) OVER (PARTITION BY "NAME") AS LAST_SUCCESS_AT,
+      ) OVER (PARTITION BY "NAME", (
+        NULL
+      )) AS LAST_SUCCESS_AT,
       MAX((
         TRY_TO_TIMESTAMP_NTZ("SCHEDULED_TIME")
-      )) OVER () AS OBSERVED_THROUGH_AT,
+      )) OVER (PARTITION BY (
+        NULL
+      )) AS OBSERVED_THROUGH_AT,
       (
         DATEDIFF(
           SECOND,
@@ -99,12 +107,19 @@ WITH product AS (
                 TRY_TO_TIMESTAMP_NTZ("COMPLETED_TIME")
               )
             END
-          ) OVER (PARTITION BY "NAME"),
+          ) OVER (PARTITION BY "NAME", (
+            NULL
+          )),
           MAX((
             TRY_TO_TIMESTAMP_NTZ("SCHEDULED_TIME")
-          )) OVER ()
+          )) OVER (PARTITION BY (
+            NULL
+          ))
         )
-      ) AS SECONDS_SINCE_LAST_SUCCESS
+      ) AS SECONDS_SINCE_LAST_SUCCESS,
+      (
+        NULL
+      ) AS ACCOUNT_NAME /* The account these rows came from (see the ACCOUNT_OF shim). */
     FROM {{ source('account_usage', 'TASK_HISTORY') }}
   ) AS base
   GROUP BY
