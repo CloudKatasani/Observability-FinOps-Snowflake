@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from snowobs_common.logging import get_logger
 from snowobs_engines.base import QueryResult
-from snowobs_engines.cache import ResultCache
+from snowobs_engines.cache import ResultCache, cache_key
 from snowobs_ingest.catalog import DuckDBCatalog
 from snowobs_semantics.compiler import CompiledQuery
 from snowobs_semantics.dialect_shims import Dialect
@@ -48,8 +48,15 @@ class DuckDBEngine:
             raise ValueError(
                 f"DuckDBEngine received {compiled.dialect.value} SQL; compile for duckdb"
             )
+        # The compiled SQL alone is not a safe cache key: two tenants query
+        # identically-named views, so their statements are byte-identical, and
+        # a new upload changes the answer without changing the statement.
+        key = cache_key(
+            sql_fingerprint=compiled.fingerprint,
+            dataset_version=self.catalog.dataset_version(),
+        )
         if self.cache is not None:
-            cached = self.cache.get(compiled.cache_key)
+            cached = self.cache.get(key)
             if cached is not None:
                 return cached
 
@@ -83,7 +90,7 @@ class DuckDBEngine:
             elapsed_ms=result.elapsed_ms,
         )
         if self.cache is not None:
-            self.cache.put(compiled.cache_key, result)
+            self.cache.put(key, result)
         return result
 
     def close(self) -> None:

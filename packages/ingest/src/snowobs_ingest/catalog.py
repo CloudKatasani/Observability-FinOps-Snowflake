@@ -8,6 +8,7 @@ uploads merge rather than double-count. The catalog is the OFFLINE engine's
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -109,6 +110,27 @@ class DuckDBCatalog:
 
     def landed_sources(self) -> list[str]:
         return [s for s in self.registry.ids() if self.parts_for(s)]
+
+    def dataset_version(self) -> str:
+        """A fingerprint of exactly what is landed for this tenant.
+
+        Two things depend on this. A cached result must not outlive the upload
+        it was computed from — the SQL is unchanged when new data lands, so the
+        statement alone cannot tell a stale answer from a fresh one. And a
+        cache shared between tenants must never serve one tenant's rows to
+        another: two tenants query identically-named views, so their compiled
+        SQL is byte-identical and the tenant has to enter the key here.
+
+        Batch file names are enough: a new upload writes a new part file, and
+        ingest never rewrites one in place.
+        """
+        parts = [
+            f"{source_id}:{path.name}"
+            for source_id in self.landed_sources()
+            for path in self.parts_for(source_id)
+        ]
+        digest = hashlib.sha256("|".join([self.tenant, *parts]).encode()).hexdigest()
+        return digest[:16]
 
     # -------------------------------------------------------------- register
     def register_all(self) -> list[str]:

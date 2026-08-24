@@ -289,3 +289,76 @@ async def test_no_endpoint_returns_a_secret_value(two_tenants: Path) -> None:
         for marker in ("-----begin", "private_key", "aws_secret", "sk-", "eyj"):
             assert marker not in lowered, f"a response looks like it carried {marker!r}"
         assert "secret_ref" not in lowered or "secret_value" not in lowered
+
+
+# ------------------------------------------------------------------- caching
+def test_the_result_cache_cannot_serve_one_tenant_s_rows_to_another(
+    two_tenants: Path,
+) -> None:
+    """The cache key must scope by tenant, because the SQL does not.
+
+    Two tenants query identically-named views, so their compiled statements are
+    byte-identical and hash to the same fingerprint. A cache keyed on the SQL
+    alone — which is what the engines used — would return whichever tenant's
+    figures happened to be computed first, with a valid-looking provenance
+    envelope attached.
+    """
+    from snowobs_engines.cache import ResultCache
+
+    shared = ResultCache()
+    compiled = SemanticCompiler().compile(
+        MetricRequest(metrics=["cost.billed_credits"], bucket_time=False, limit=10),
+        Dialect.DUCKDB,
+    )
+
+    def read(tenant: str) -> Decimal:
+        catalog = DuckDBCatalog(two_tenants, tenant=tenant)
+        catalog.register_all()
+        try:
+            return Decimal(str(DuckDBEngine(catalog, cache=shared).execute(compiled).scalar()))
+        finally:
+            catalog.close()
+
+    acme, globex = read("acme"), read("globex")
+    assert acme == credits_for(two_tenants, "acme")
+    assert globex == credits_for(two_tenants, "globex")
+    assert acme != globex
+    # Both were computed, not one served from the other's entry.
+    assert shared.misses >= 2
+
+
+def test_a_cached_answer_does_not_survive_the_upload_it_was_computed_from(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """A new upload changes the answer without changing the statement."""
+    from snowobs_engines.cache import ResultCache
+
+    lake: Path = tmp_path_factory.mktemp("restated-lake")
+    first: Path = tmp_path_factory.mktemp("extract-first")
+    write_csv(generate(GeneratorConfig(days=7, queries_per_day=100, seed=5)), first)
+    IngestPipeline(lake, tenant="acme").ingest_directory(first)
+
+    cache = ResultCache()
+    compiled = SemanticCompiler().compile(
+        MetricRequest(metrics=["cost.billed_credits"], bucket_time=False, limit=10),
+        Dialect.DUCKDB,
+    )
+
+    def read() -> Decimal:
+        catalog = DuckDBCatalog(lake, tenant="acme")
+        catalog.register_all()
+        try:
+            return Decimal(str(DuckDBEngine(catalog, cache=cache).execute(compiled).scalar()))
+        finally:
+            catalog.close()
+
+    before = read()
+    assert read() == before  # warm, and served from the cache
+    assert cache.hits >= 1
+
+    # A second extract lands. The SQL is unchanged; the answer is not.
+    second: Path = tmp_path_factory.mktemp("extract-second")
+    write_csv(generate(GeneratorConfig(days=7, queries_per_day=100, seed=6)), second)
+    IngestPipeline(lake, tenant="acme").ingest_directory(second)
+
+    assert read() != before, "a stale figure survived the upload that superseded it"

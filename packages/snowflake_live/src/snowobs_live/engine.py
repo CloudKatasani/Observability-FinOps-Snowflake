@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from snowobs_common.logging import get_logger
 from snowobs_engines.base import QueryResult
-from snowobs_engines.cache import ResultCache
+from snowobs_engines.cache import ResultCache, cache_key
 from snowobs_live.connection import ConnectionProfile, SnowflakeConnector, query_tag
 from snowobs_semantics.compiler import CompiledQuery
 from snowobs_semantics.dialect_shims import Dialect
@@ -119,8 +119,16 @@ class SnowflakeEngine:
             raise ValueError(
                 f"SnowflakeEngine received {compiled.dialect.value} SQL; compile for snowflake"
             )
+        # Scoped to the tenant and the account it reads, because two tenants
+        # compile byte-identical SQL against identically-named ACCOUNT_USAGE
+        # views. There is no cheap fingerprint of a live account's state, so
+        # freshness here rests on the cache TTL rather than on a version.
+        key = cache_key(
+            sql_fingerprint=compiled.fingerprint,
+            dataset_version=f"{self.tenant}:{self.profile.account}",
+        )
         if self.cache is not None:
-            cached = self.cache.get(compiled.cache_key)
+            cached = self.cache.get(key)
             if cached is not None:
                 return cached
 
@@ -181,7 +189,7 @@ class SnowflakeEngine:
             warnings=list(guarded.adjustments),
         )
         if self.cache is not None:
-            self.cache.put(compiled.cache_key, result)
+            self.cache.put(key, result)
         return result
 
     def _session(self, *, surface: str, trace_id: str) -> _Session:
