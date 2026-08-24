@@ -68,14 +68,17 @@ snowobs/
 ├── packages/
 │   ├── semantics/                # ★ single source of truth: sources/entities/metrics/
 │   │                             #   allocation YAML + compiler + dialect_shims.py
-│   ├── engines/                  # QueryEngine protocol, snowflake/duckdb adapters, cache
+│   ├── engines/                  # QueryEngine protocol, duckdb adapter, cache, parity
 │   ├── ingest/                   # profiler, mapper, loader, drift, export_script_gen
 │   ├── sqlguard/
 │   ├── agents/                   # runtime, specialists, prompts, evals
 │   ├── llm/                      # base + anthropic/bedrock/cortex adapters
-│   ├── analytics/                # forecast, anomaly, rightsizing, levers, recommender
-│   ├── products/                 # data product registry + lifecycle
-│   ├── artifacts/                # dbt / DDL / semantic / listing emitters
+│   ├── analytics/                # forecast, anomaly, rightsizing, levers, alerting
+│   ├── finops/                   # allocation waterfall + the reconciliation gate
+│   ├── dataproducts/             # data product registry, contracts, lifecycle, and
+│   │                             #   emitters/ (dbt / DDL / semantic view / listing /
+│   │                             #   Cortex Search / agent spec)
+│   ├── snowflake_live/           # connection, grant probe, provisioning, pushdown
 │   └── common/                   # config, logging, telemetry, errors, security
 ├── fixtures/{generator,golden}/  # synthetic ACCOUNT_USAGE generator + parity fixtures
 ├── deploy/{docker,compose,terraform,helm,spcs}/
