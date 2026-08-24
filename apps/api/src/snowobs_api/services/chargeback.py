@@ -1,19 +1,27 @@
-"""Chargeback orchestration: read the catalog, allocate, reconcile, gate.
+"""Chargeback orchestration: gather, allocate, reconcile, gate.
 
-This service is where the allocation engine meets real landed data. It reads
-the warehouse-day metering, the per-query attribution, and the account's daily
-billed cloud services, runs the waterfall, then puts the result behind the
-reconciliation gate before anything is published (R6).
+This service is where the allocation engine meets real data. It reads the
+warehouse-day metering, the per-query attribution, and the account's daily
+billed cloud services through the governed metric layer, runs the waterfall,
+then puts the result behind the reconciliation gate before anything is
+published (R6).
+
+It does not know which engine answers those queries. The same three metric
+requests are compiled for Snowflake or for DuckDB by `services/engines.py`, so
+chargeback is one implementation rather than two (R1).
 """
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from contextlib import AbstractContextManager
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+from snowobs_api.services.engines import EngineChoice, open_engine
 from snowobs_common.config import Settings
 from snowobs_common.errors import DataUnavailableError
+from snowobs_engines.base import QueryResult
 from snowobs_finops.allocation import (
     UNATTRIBUTED,
     AllocationEngine,
@@ -23,14 +31,12 @@ from snowobs_finops.allocation import (
     WarehouseDay,
 )
 from snowobs_finops.reconciliation import ReconciliationRun, reconcile
-from snowobs_ingest.catalog import DuckDBCatalog
 from snowobs_semantics.compiler import (
     CompiledQuery,
     MetricRequest,
     SemanticCompiler,
     TimeRange,
 )
-from snowobs_semantics.dialect_shims import Dialect
 from snowobs_semantics.model import TimeGrain
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -42,6 +48,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 #: Sources the chargeback engine cannot work without.
 REQUIRED_SOURCES = ("warehouse_metering_history", "query_attribution_history")
+
+#: How far back LIVE mode allocates when a caller names no dates. A month of
+#: complete days: long enough to be a useful chargeback period, short enough
+#: that an unqualified request never scans a year of ACCOUNT_USAGE.
+LIVE_DEFAULT_WINDOW_DAYS = 30
 CENTS = Decimal("0.01")
 
 #: What each compiled query contributes to the allocation, so "show the SQL"
@@ -77,15 +88,12 @@ class ChargebackService:
         #: constant written next to the response model.
         self._compiled: list[CompiledQuery] = []
 
-    def _catalog(self) -> DuckDBCatalog:
-        from snowobs_api.services.datasets import storage_root
-
-        catalog = DuckDBCatalog(storage_root(self.settings), tenant=self.tenant)
-        catalog.register_all()
-        return catalog
+    def _engine(self) -> AbstractContextManager[EngineChoice]:
+        """LIVE or OFFLINE, chosen in one place for the whole application (R10)."""
+        return open_engine(self.settings, tenant=self.tenant)
 
     # ------------------------------------------------------------- gathering
-    def _warehouse_days(self, catalog: DuckDBCatalog, start: date, end: date) -> list[WarehouseDay]:
+    def _warehouse_days(self, chosen: EngineChoice, start: date, end: date) -> list[WarehouseDay]:
         request = MetricRequest(
             metrics=["cost.by_warehouse_credits"],
             dimensions=["warehouse"],
@@ -93,7 +101,7 @@ class ChargebackService:
             time_range=TimeRange(start=start, end=end),
             limit=50_000,
         )
-        rows = self._execute(catalog, request)
+        rows = self._execute(chosen, request)
         return [
             WarehouseDay(
                 warehouse=str(row["WAREHOUSE"]),
@@ -104,7 +112,7 @@ class ChargebackService:
             if row.get("WAREHOUSE") and row.get("TIME_BUCKET")
         ]
 
-    def _query_costs(self, catalog: DuckDBCatalog, start: date, end: date) -> list[QueryCost]:
+    def _query_costs(self, chosen: EngineChoice, start: date, end: date) -> list[QueryCost]:
         # The team dimension already applies the query-tag rule of the waterfall;
         # rows carrying UNATTRIBUTED fall through to the remaining rules below.
         request = MetricRequest(
@@ -114,7 +122,7 @@ class ChargebackService:
             time_range=TimeRange(start=start, end=end),
             limit=50_000,
         )
-        rows = self._execute(catalog, request)
+        rows = self._execute(chosen, request)
         costs: list[QueryCost] = []
         for index, row in enumerate(rows):
             team = str(row.get("TEAM") or "")
@@ -131,25 +139,21 @@ class ChargebackService:
             )
         return costs
 
-    def _cloud_services(
-        self, catalog: DuckDBCatalog, start: date, end: date
-    ) -> dict[date, Decimal]:
+    def _cloud_services(self, chosen: EngineChoice, start: date, end: date) -> dict[date, Decimal]:
         request = MetricRequest(
             metrics=["cost.cloud_services_credits"],
             grain=TimeGrain.DAY,
             time_range=TimeRange(start=start, end=end),
             limit=10_000,
         )
-        rows = self._execute(catalog, request)
+        rows = self._execute(chosen, request)
         return {
             _as_date(row["TIME_BUCKET"]): Decimal(str(row["COST_CLOUD_SERVICES_CREDITS"] or 0))
             for row in rows
             if row.get("TIME_BUCKET")
         }
 
-    def _metered_by_day(
-        self, catalog: DuckDBCatalog, start: date, end: date
-    ) -> dict[date, Decimal]:
+    def _metered_by_day(self, chosen: EngineChoice, start: date, end: date) -> dict[date, Decimal]:
         """The billed figure the gate reconciles against (R6)."""
         request = MetricRequest(
             metrics=["cost.by_warehouse_credits"],
@@ -157,20 +161,17 @@ class ChargebackService:
             time_range=TimeRange(start=start, end=end),
             limit=10_000,
         )
-        rows = self._execute(catalog, request)
+        rows = self._execute(chosen, request)
         return {
             _as_date(row["TIME_BUCKET"]): Decimal(str(row["COST_BY_WAREHOUSE_CREDITS"] or 0))
             for row in rows
             if row.get("TIME_BUCKET")
         }
 
-    def _execute(self, catalog: DuckDBCatalog, request: MetricRequest) -> list[dict[str, Any]]:
-        from snowobs_engines.duckdb_engine import DuckDBEngine
-
-        compiled = self.compiler.compile(request, Dialect.DUCKDB)
+    def _execute(self, chosen: EngineChoice, request: MetricRequest) -> list[dict[str, Any]]:
+        compiled = self.compiler.compile(request, chosen.dialect)
         self._compiled.append(compiled)
-        engine = DuckDBEngine(catalog)
-        result = engine.execute(compiled)
+        result: QueryResult = chosen.engine.execute(compiled)
         return result.dicts()
 
     # ------------------------------------------------------------ provenance
@@ -202,15 +203,23 @@ class ChargebackService:
         return provisional, latency_floor, sources, disclosures
 
     # --------------------------------------------------------------- results
-    def _landed_window(self, catalog: DuckDBCatalog) -> tuple[date, date] | None:
-        """The period the allocation inputs actually cover.
+    def _default_window(self, chosen: EngineChoice) -> tuple[date, date] | None:
+        """The period to allocate when the caller names no dates.
 
-        Used when a caller names no dates. Taken from the sources the waterfall
-        reads rather than from every landed source: a snapshot of `users` that
-        stretches further back than the metering history would widen the window
-        to a period there is no cost data for, and the reconciliation gate would
-        then compare a full allocation against a partly empty bill.
+        The two modes answer this differently because the question means
+        different things in each. OFFLINE has a *landed* window — the extracts
+        cover what they cover, and allocating outside it would reconcile a full
+        allocation against a partly empty bill. LIVE has no such boundary: the
+        account holds a year of ACCOUNT_USAGE, so the sensible default is a
+        recent period rather than a scan of all of it.
         """
+        if chosen.mode == "live":
+            end = date.today() - timedelta(days=1)  # noqa: DTZ011 — account-date granularity
+            return end - timedelta(days=LIVE_DEFAULT_WINDOW_DAYS - 1), end
+
+        catalog = getattr(chosen.engine, "catalog", None)
+        if catalog is None:
+            return None
         starts, ends = [], []
         for source_id in REQUIRED_SOURCES:
             stats = catalog.stats(source_id)
@@ -226,11 +235,10 @@ class ChargebackService:
     def allocate(
         self, start: date | None, end: date | None
     ) -> tuple[AllocationResult, ReconciliationRun, date, date]:
-        catalog = self._catalog()
         self._compiled.clear()
-        try:
+        with self._engine() as chosen:
             if start is None or end is None:
-                landed = self._landed_window(catalog)
+                landed = self._default_window(chosen)
                 if landed is None:
                     # R3: no inputs is not a zero-cost account, and the caller
                     # gets told which sources are missing rather than an
@@ -246,20 +254,18 @@ class ChargebackService:
 
             engine = AllocationEngine(registry=self._registry())
             allocation = engine.allocate(
-                self._warehouse_days(catalog, start, end),
-                self._query_costs(catalog, start, end),
-                cloud_services_credits=self._cloud_services(catalog, start, end),
+                self._warehouse_days(chosen, start, end),
+                self._query_costs(chosen, start, end),
+                cloud_services_credits=self._cloud_services(chosen, start, end),
             )
             run = reconcile(
                 allocation,
-                self._metered_by_day(catalog, start, end),
+                self._metered_by_day(chosen, start, end),
                 tolerance_pct=self.settings.finops.reconcile_tolerance_pct,
                 period_start=start,
                 period_end=end,
             )
             return allocation, run, start, end
-        finally:
-            catalog.close()
 
     def _registry(self) -> TeamRegistry:
         """Role/user/warehouse mappings.

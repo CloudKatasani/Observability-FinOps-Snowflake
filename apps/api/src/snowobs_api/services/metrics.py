@@ -8,18 +8,17 @@ the figure is provisional.
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from snowobs_api.services.engines import EngineChoice, open_engine
 from snowobs_common.config import Settings
 from snowobs_engines.cache import ResultCache
-from snowobs_engines.duckdb_engine import DuckDBEngine
-from snowobs_ingest.catalog import DuckDBCatalog
 from snowobs_semantics.compiler import MetricRequest, SemanticCompiler
-from snowobs_semantics.dialect_shims import Dialect
 from snowobs_semantics.model import Metric, default_model
 
 
@@ -89,20 +88,27 @@ class MetricService:
 
         return storage_root(self.settings)
 
-    def _engine(self) -> tuple[DuckDBEngine, DuckDBCatalog]:
-        # OFFLINE is the engine available without a Snowflake connection; the
-        # LIVE adapter is selected here once a connection is configured.
-        catalog = DuckDBCatalog(self._storage_root(), tenant=self.tenant)
-        return DuckDBEngine(catalog, cache=self._cache), catalog
+    def _engine(self) -> AbstractContextManager[EngineChoice]:
+        """The engine this deployment answers from — LIVE or OFFLINE (R10).
+
+        Which one is decided in `services/engines.py` and nowhere else, so a
+        dashboard cannot end up serving landed extracts while the deployment
+        believes it is reading the account.
+        """
+        return open_engine(
+            self.settings,
+            tenant=self.tenant,
+            cache=self._cache,
+            storage_root=self._storage_root(),
+        )
 
     def catalog_entries(self) -> list[Metric]:
         return sorted(self.model.metrics.values(), key=lambda m: (m.domain, m.id))
 
     def query(self, request: MetricRequest) -> MetricSeries:
-        engine, catalog = self._engine()
-        try:
-            compiled = self.compiler.compile(request, Dialect.DUCKDB)
-            result = engine.execute(compiled)
+        with self._engine() as chosen:
+            compiled = self.compiler.compile(request, chosen.dialect)
+            result = chosen.engine.execute(compiled)
             return MetricSeries(
                 metrics=list(request.metrics),
                 columns=result.columns,
@@ -116,15 +122,12 @@ class MetricService:
                 truncated=result.truncated,
                 row_count=result.row_count,
             )
-        finally:
-            catalog.close()
 
     def tile(self, metric_id: str, request: MetricRequest) -> MetricValue:
         """A single-figure tile. Unavailability is explained, never zeroed (R3)."""
         metric = self.model.metric(metric_id)
-        engine, catalog = self._engine()
-        try:
-            available = engine.available_relations()
+        with self._engine() as chosen:
+            available = chosen.engine.available_relations()
             missing = [
                 source for source in metric.requires_sources if source.upper() not in available
             ]
@@ -147,8 +150,8 @@ class MetricService:
                     unavailable_reason=("Unavailable — requires " + ", ".join(sorted(missing))),
                 )
 
-            compiled = self.compiler.compile(request, Dialect.DUCKDB)
-            result = engine.execute(compiled)
+            compiled = self.compiler.compile(request, chosen.dialect)
+            result = chosen.engine.execute(compiled)
             return MetricValue(
                 metric_id=metric.id,
                 name=metric.name,
@@ -165,5 +168,3 @@ class MetricService:
                 sql=result.executed_sql,
                 allocation_method=metric.allocation_method,
             )
-        finally:
-            catalog.close()

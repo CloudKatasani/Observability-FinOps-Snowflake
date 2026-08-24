@@ -34,6 +34,9 @@ class SecretsSettings(BaseModel):
     """Secrets adapter. Only secret *references* are ever stored in the database."""
 
     provider: Literal["aws", "file", "env"] = "env"
+    #: Where the ``file`` provider reads its JSON object from. A path, never a
+    #: secret: the values behind it are resolved at the moment of use (§17).
+    file_path: str = "/run/secrets/snowobs.json"
 
 
 class AuthSettings(BaseModel):
@@ -75,6 +78,29 @@ class FinOpsSettings(BaseModel):
     close_business_day: int = Field(default=3, ge=1, le=20)
 
 
+class AlertingSettings(BaseModel):
+    """Alert rule evaluation and notification dispatch (§14).
+
+    ``enabled`` gates *outbound* traffic only. Rules are always loaded, listed,
+    and backtestable — an operator can see and validate the rule set before any
+    of it is allowed to page anybody, which is the order those two things
+    should happen in.
+    """
+
+    enabled: bool = False
+    #: Path to the declared rule set. ``None`` uses the shipped
+    #: ``config/alert_rules.yaml``.
+    rules_file: str | None = None
+    #: Days of history fetched per rule, so a delta or anomaly condition has a
+    #: baseline. The floor is the anomaly detector's minimum baseline (14 days)
+    #: plus a fortnight of margin.
+    lookback_days: int = Field(default=45, ge=28, le=400)
+    #: How often the worker's scheduled evaluation runs.
+    evaluation_interval_minutes: int = Field(default=60, ge=5, le=1440)
+    #: Warehouse named by the OFFLINE ``CREATE ALERT`` DDL export (§14).
+    ddl_warehouse: str = "WH_SNOWOBS_APP"
+
+
 class GuardrailsSettings(BaseModel):
     """Hard limits applied to every engine query (R9)."""
 
@@ -90,6 +116,12 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         env_nested_delimiter="__",
         extra="ignore",
+        # Without this a field carrying a validation alias can *only* be set by
+        # that alias, so `Settings(mode="offline")` silently yields the default
+        # instead — the constructor accepts the argument and discards it. Tests
+        # and fixtures build settings by field name, and a silently ignored
+        # mode is precisely the kind of wrong that still passes.
+        populate_by_name=True,
     )
 
     mode: Literal["live", "offline", "auto"] = Field(
@@ -121,6 +153,7 @@ class Settings(BaseSettings):
     llm: LLMSettings = LLMSettings()
     snowflake: SnowflakeSettings = SnowflakeSettings()
     finops: FinOpsSettings = FinOpsSettings()
+    alerting: AlertingSettings = AlertingSettings()
     guardrails: GuardrailsSettings = GuardrailsSettings()
 
 
