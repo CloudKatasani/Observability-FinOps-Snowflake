@@ -20,8 +20,12 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/packages /app/packages
 COPY --from=builder /app/apps/worker /app/apps/worker
+# The alert evaluation job runs the API's AlertService, so the workspace
+# package must be present in the runtime image, not only at build time.
+COPY --from=builder /app/apps/api /app/apps/api
 COPY config/ /app/config/
-ENV PATH="/app/.venv/bin:$PATH" SNOWOBS_BRANDING_FILE=/app/config/branding.yaml
+ENV PATH="/app/.venv/bin:$PATH" SNOWOBS_BRANDING_FILE=/app/config/branding.yaml \
+    ALERTING__RULES_FILE=/app/config/alert_rules.yaml
 USER snowobs
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s \
   CMD ["arq", "--check", "snowobs_worker.main.WorkerSettings"]

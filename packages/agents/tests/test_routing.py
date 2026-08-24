@@ -176,7 +176,7 @@ def test_a_question_that_is_not_a_comparison_yields_no_windows() -> None:
 def test_a_breakdown_does_not_answer_a_question_that_asked_for_no_breakdown(
     model: SemanticModel,
 ) -> None:
-    """"What is it" and "how is it distributed" are different questions.
+    """ "What is it" and "how is it distributed" are different questions.
 
     A slice is only the right answer when the question asks how the figure
     splits. Without that, a metric that splits by model, team, or warehouse is

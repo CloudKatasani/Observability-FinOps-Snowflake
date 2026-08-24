@@ -117,7 +117,7 @@ three things it can say:
 |---|---|---|
 | **Reconciled: allocated X vs metered Y (±Z%), within ±0.5%** | The parts add up to the bill | Publish them |
 | **Chargeback blocked: … outside ±0.5%. Largest daily variances: …** | They do not add up | Nothing. The team table is empty by design |
-| **Reconciliation could not run: no metered credits for …** | There is nothing to reconcile | Check the coverage page — an input has not landed |
+| **Reconciliation could not run: no metered credits for …** | There is nothing to reconcile | Check the coverage page — an input has not landed. If nothing at all has landed, the page reports that instead of showing an account that appears to have cost nothing |
 
 A blocked gate is not a bug to work around. It is the platform refusing to hand you
 a number you would have to defend later. Take the named days to whoever owns the

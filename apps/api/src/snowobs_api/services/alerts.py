@@ -16,7 +16,7 @@ Three behaviours are load-bearing:
   order, so the answer is the same whether the worker has been up for a month
   or started thirty seconds ago.
 * **Dedup is process state, and is honest about it.** The ledger suppresses
-  re-fires while an alert is open; a restart clears it (A-15).
+  re-fires while an alert is open; a restart clears it (A-24).
 """
 
 from __future__ import annotations
@@ -68,13 +68,37 @@ _ENGINES: dict[str, AlertEngine] = {}
 
 
 def alert_engine_for(rule_set: RuleSet) -> AlertEngine:
-    """The process-wide engine for a rule set, created once."""
+    """The process-wide engine for a rule set.
+
+    An edited rule file is picked up without losing state: the engine is rebuilt
+    around the new definitions, and the dedup ledger and the statistics of every
+    rule that survived the edit are carried across. Discarding them would mean
+    that raising one threshold re-fires every other open alert in the set.
+    """
     key = str(rule_set.path)
     engine = _ENGINES.get(key)
-    if engine is None or set(engine.rules) != set(rule_set.ids):
-        engine = AlertEngine(list(rule_set.rules))
-        _ENGINES[key] = engine
-    return engine
+    if engine is not None and _same_definitions(engine, rule_set):
+        return engine
+
+    rebuilt = AlertEngine(list(rule_set.rules))
+    if engine is not None:
+        rebuilt.ledger = engine.ledger
+        for rule_id, statistics in engine.statistics.items():
+            if rule_id in rebuilt.statistics:
+                rebuilt.statistics[rule_id] = statistics
+    _ENGINES[key] = rebuilt
+    return rebuilt
+
+
+def _same_definitions(engine: AlertEngine, rule_set: RuleSet) -> bool:
+    """Are the engine's rules the same objects the file now declares?
+
+    Compared field by field rather than by identity: ``AlertRule`` carries a
+    mutable ``scope`` mapping, so it is not hashable and cannot go in a set.
+    """
+    if list(engine.rules) != list(rule_set.ids):
+        return False
+    return all(engine.rules[rule.id] == rule for rule in rule_set.rules)
 
 
 def reset_alert_engines() -> None:
@@ -209,6 +233,12 @@ class AlertService:
     # ------------------------------------------------------------ evaluation
     def _engine_context(self) -> AbstractContextManager[EngineChoice]:
         return open_engine(self.settings, tenant=self.tenant)
+
+    def observe_rule(self, rule_id: str) -> Observation:
+        """One rule's window series, opening and closing the engine itself."""
+        rule = self.rule(rule_id)
+        with self._engine_context() as chosen:
+            return self.observe(rule, chosen)
 
     def observe(self, rule: AlertRule, chosen: EngineChoice) -> Observation:
         """Fetch the rule's window series through the governed metric layer."""

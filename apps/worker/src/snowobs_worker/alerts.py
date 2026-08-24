@@ -35,7 +35,7 @@ async def evaluate_alert_rules(ctx: dict[str, Any]) -> dict[str, Any]:
     Registered on a schedule in :class:`~snowobs_worker.main.WorkerSettings`.
     The dedup ledger and per-rule statistics live in this worker process, so a
     re-fire is suppressed while an alert stays open and a restart starts the
-    ledger empty (A-15).
+    ledger empty (A-24).
     """
     settings: Settings = ctx.get("settings") or load_settings()
     service = AlertService(settings)

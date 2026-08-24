@@ -21,7 +21,8 @@ COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/packages /app/packages
 COPY --from=builder /app/apps/api /app/apps/api
 COPY config/ /app/config/
-ENV PATH="/app/.venv/bin:$PATH" SNOWOBS_BRANDING_FILE=/app/config/branding.yaml
+ENV PATH="/app/.venv/bin:$PATH" SNOWOBS_BRANDING_FILE=/app/config/branding.yaml \
+    ALERTING__RULES_FILE=/app/config/alert_rules.yaml
 USER snowobs
 EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s \

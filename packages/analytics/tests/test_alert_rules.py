@@ -252,8 +252,12 @@ def test_an_incomplete_channel_declaration_does_not_load(tmp_path: Path) -> None
 
 def test_channels_filter_by_tier() -> None:
     channel = ChannelSpec(
-        name="digest", kind="email", sender="a@b.invalid", recipients=("c@d.invalid",),
-        smtp_host="localhost", tiers=(AlertTier.P4,),
+        name="digest",
+        kind="email",
+        sender="a@b.invalid",
+        recipients=("c@d.invalid",),
+        smtp_host="localhost",
+        tiers=(AlertTier.P4,),
     )
     assert channel.accepts(AlertTier.P4)
     assert not channel.accepts(AlertTier.P1)

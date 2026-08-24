@@ -31,6 +31,20 @@ are), [`SECURITY.md`](SECURITY.md) (controls and limitations),
   - [Parity fails in CI](#parity-fails-in-ci)
   - [Agent evals fail in CI](#agent-evals-fail-in-ci)
   - [The LLM provider is down](#the-llm-provider-is-down)
+- [Alert conditions](#alert-conditions) — one entry per declared alert rule
+  - [Daily spend has spiked](#daily-spend-has-spiked)
+  - [Spend is tracking over budget](#spend-is-tracking-over-budget)
+  - [Unattributed cost is above target](#unattributed-cost-is-above-target)
+  - [The cloud services ratio is too high](#the-cloud-services-ratio-is-too-high)
+  - [A warehouse is burning idle credits](#a-warehouse-is-burning-idle-credits)
+  - [A warehouse is queueing](#a-warehouse-is-queueing)
+  - [Query failures are elevated](#query-failures-are-elevated)
+  - [Query performance has regressed](#query-performance-has-regressed)
+  - [Storage is growing faster than expected](#storage-is-growing-faster-than-expected)
+  - [A pipeline is failing or late](#a-pipeline-is-failing-or-late)
+  - [Failed logins have spiked](#failed-logins-have-spiked)
+  - [A privileged grant appeared](#a-privileged-grant-appeared)
+  - [AI services credits have jumped](#ai-services-credits-have-jumped)
 - [Credential rotation](#credential-rotation)
 - [Backup and restore](#backup-and-restore)
 - [Tenant purge](#tenant-purge)
@@ -344,6 +358,7 @@ aws logs tail "$LOG_GROUP" --since 30m --format short | grep -i 'error\|exceptio
 | `…/sql-guard` | A statement was refused by the guard | Expected for a bad ad-hoc query. A *burst* of these against dashboard traffic means a compiler change is emitting SQL the guard rejects — treat as a bad release |
 | `…/compilation` | A metric request could not be compiled | Usually a client sending an unknown metric or dimension. Check `GET /api/v1/metrics/catalog` |
 | `…/snowflake-connection` | LIVE connection failure | Key expired or rotated, role dropped, network path lost. See [Credential rotation](#credential-rotation) |
+| `…/data-unavailable` | A source the answer needs has not been landed. 422, not 404: the remedy is to supply the input | Check `/api/v1/datasets/coverage`; the remediation is on the source. Chargeback raises it when neither `warehouse_metering_history` nor `query_attribution_history` has landed |
 | `…/agent-budget` | A caller hit the per-turn or daily agent budget | Working as designed. Raise the limits only deliberately |
 | `…/approver-identity` | An approval arrived without `X-Snowobs-Actor` | Client bug; the refusal is correct |
 | No problem type, bare 500 | An unhandled exception | Capture the traceback and the trace id, then [Rollback](#rollback) |
@@ -444,10 +459,11 @@ Statements over 1000 ms are logged (`log_min_duration_statement = 1000`).
 
 ## Application conditions
 
-These are conditions the *product* raises. They are not CloudWatch alarms today —
-the platform surfaces them in the UI and in CI. When the alerting engine is wired
-to routes, these become the first rules, and the linked sections are their runbook
-URLs.
+These are conditions the *product* raises. They are not CloudWatch alarms — the
+platform surfaces them in the UI and in CI. The conditions that a declared alert
+rule watches have their own sections under
+[Alert conditions](#alert-conditions); the ones here are raised by the
+application without a rule behind them.
 
 ### The reconciliation gate is red
 
@@ -463,6 +479,8 @@ variance.
 **Diagnose.**
 
 ```bash
+# Omitting the dates allocates the landed window and echoes it back as
+# period_start / period_end.
 curl -s "$APP_URL/api/v1/chargeback/allocation?start=2026-08-01&end=2026-08-31" | jq '.reconciliation'
 curl -s "$APP_URL/api/v1/chargeback/reconciliation/2026-08-14" | jq .
 ```
@@ -579,6 +597,324 @@ exact models the task role may invoke — but read the caveat under
 [Credential rotation](#credential-rotation) first: neither vendor SDK is installed
 in the published image, so both providers currently fail with a readable
 `LLMError` and `none` is the working fallback.
+
+---
+
+## Alert conditions
+
+One section per declared rule in [`config/alert_rules.yaml`](../config/alert_rules.yaml).
+The rule's `runbook` field points here, the loader refuses a rule whose link does
+not resolve, and a test asserts every link lands on a heading that exists. If you
+add a rule, add its section first.
+
+Two commands are the same for every one of them, so they are not repeated below:
+
+```bash
+# What is the rule, what has it done, and what does it reach?
+curl -s "$APP_URL/api/v1/alerts/rules/<rule-id>" | jq '{threshold, window, persistence, tier, channels, statistics}'
+# What would it have done over the landed window, before you change anything?
+curl -s -X POST "$APP_URL/api/v1/alerts/rules/<rule-id>/backtest" | jq '{would_have_fired, firing_days, summary}'
+```
+
+If the backtest says a rule would have fired thirty times last month, the rule is
+wrong, not the account. Fix the threshold or the persistence rather than muting
+the channel.
+
+### Daily spend has spiked
+
+**Rule.** `cost.daily_spend_anomaly` (P1) — robust z-score of `cost.billed_credits`
+for `WAREHOUSE_METERING`, two consecutive days.
+
+**Diagnose.** Get the decomposition before you get an opinion:
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["cost.by_warehouse_credits"],"dimensions":["warehouse"],
+       "start":"'"$SPIKE_DAY"'","end":"'"$SPIKE_DAY"'","limit":20}' | jq '.rows'
+```
+
+| Signal | Likely cause | Action |
+|---|---|---|
+| One warehouse holds most of the delta | A new or resized workload | Confirm with `wh.credits_per_query` and `wh.utilisation_pct` for that warehouse; if utilisation is flat and credits doubled, the size changed |
+| The delta is spread across warehouses | A platform-wide change — a schedule moved, a clustering job started | Check `pipe.serverless_task_credits` and `cost.cloud_services_ratio` for the same day |
+| The spike is a backfill | Expected | Say so on the alert and let it resolve; do not lower the threshold to hide it |
+| The baseline is short | The account has under 14 days landed | The detector returns nothing below its minimum baseline, so this rule cannot have fired for that reason — check the landed window on the coverage page |
+
+**Verify.** The next evaluation resolves the alert once the day's score falls back
+under the threshold. Nothing needs acknowledging for it to close.
+
+### Spend is tracking over budget
+
+**Rule.** `cost.budget_breach` (P2) — month-to-date `chargeback.budget_variance_credits`
+above the configured budget.
+
+**First, check the budget is real.** The shipped threshold is the metric's declared
+warn level and is a placeholder. If nobody has set it to this account's actual
+budget, the correct action is to set it, not to investigate the spend.
+
+**Then.** Compare the landing point with the budget rather than the month-to-date
+figure — a breach on the 3rd and a breach on the 28th are different problems:
+
+```bash
+curl -s "$APP_URL/api/v1/metrics/cost.billed_credits/tile?start=$MONTH_START&end=$TODAY" | jq '{value, as_of, latency_floor_minutes}'
+```
+
+| Signal | Action |
+|---|---|
+| Landing point inside budget, MTD over because of one spike | Handle the spike; the budget is fine |
+| Landing point over budget with flat daily spend | A step change in baseline consumption — go to the optimisation workbench, not to the alert |
+| Budget was never configured | Set it. A budget alert against a placeholder is noise with a P2 on it |
+
+### Unattributed cost is above target
+
+**Rule.** `cost.unattributed_share_high` (P3) — `cost.unattributed_share` above 15%
+for two consecutive weeks.
+
+**Diagnose.** Unattributed cost is a tagging problem, and the leaderboard of
+contributors is public by design:
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["cost.unattributed_share"],"dimensions":["warehouse"],"limit":20}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| One warehouse dominates | Its jobs are not setting `QUERY_TAG`. Fix the job, not the rule |
+| Spread evenly and rising | A tagging convention changed, or a new team onboarded without one. Check the allocation rules in Admin |
+| Concentrated in ad-hoc/BI warehouses | Interactive users cannot be expected to tag by hand; map them by role or by warehouse in the allocation rules instead |
+
+Do not raise the threshold to clear the alert. Unattributed cost is the number
+that decides whether chargeback is credible.
+
+### The cloud services ratio is too high
+
+**Rule.** `cost.cloud_services_ratio_high` (P4) — `cost.cloud_services_ratio` above
+10% of compute for two consecutive weeks.
+
+Above 10% the excess is billable; at or below it the whole day's cloud services is
+rebated. This is informational: it goes to the digest, and the fix is a query
+pattern, not an incident.
+
+| Signal | Likely cause | Action |
+|---|---|---|
+| High ratio with low compute | Small warehouses doing metadata-heavy work — `SHOW`/`DESCRIBE` loops, `INFORMATION_SCHEMA` polling | Cache the metadata in the caller; this is the common cause |
+| High ratio with heavy DDL | Frequent clones, or a job recreating objects each run | Make the job idempotent rather than recreating |
+| Ratio climbing with cloning | Zero-copy clones are cheap to make and not free to track | Review clone lifecycle in the storage hygiene lever |
+
+### A warehouse is burning idle credits
+
+**Rules.** `warehouse.idle_share_sustained` (P3) — `wh.idle_pct` above 60% for seven
+consecutive days — and `warehouse.zombie_credits` (P3) — `wh.zombie_credits` above 5
+for two consecutive weeks. The first is a warehouse doing some work inefficiently;
+the second is a warehouse doing none at all.
+
+**Diagnose.**
+
+```bash
+curl -s "$APP_URL/api/v1/metrics/wh.autosuspend_seconds/tile" | jq '.value'
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["wh.idle_pct","wh.query_count"],"dimensions":["warehouse"],"limit":25}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| Long auto-suspend, steady query volume | Tune auto-suspend. The lever models the saving as measured suspend gap × credit rate × frequency |
+| No queries at all for the window | A zombie. Confirm nobody owns it, then suspend it — a proposal with an owner and a rollback statement, never an unannounced change (R8) |
+| Idle high only in business hours | A keep-warm pattern someone chose deliberately | Record the decision; it is a cost trade, not a defect |
+
+**Never** hard-suspend a production warehouse from a resource monitor to fix this
+(§27.8). Production monitors are notify-only.
+
+### A warehouse is queueing
+
+**Rule.** `warehouse.queue_overload` (P2) — `wh.queue_overload_pct` above 15% for two
+consecutive days.
+
+**Diagnose.** Queueing is either not enough warehouse or too much work:
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["wh.queue_overload_pct","wh.utilisation_pct","wh.max_clusters"],
+       "dimensions":["warehouse"],"limit":25}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| Queue high, utilisation high | Genuinely undersized. Size up, or raise `MAX_CLUSTER_COUNT` if the load is concurrent rather than heavy |
+| Queue high, utilisation low | Concurrency limit, not capacity — look at `MAX_CONCURRENCY_LEVEL` and at long-running statements holding slots |
+| Queue spikes at one hour | Scheduling collision. The scheduling-consolidation lever ranks co-schedulable jobs |
+| `max_clusters` is 1 | Multi-cluster is off; a single burst cannot scale out |
+
+The right-sizing quadrant on the engineering deep-dive plots exactly this pair, so
+prefer it to a table when two or more warehouses are involved.
+
+### Query failures are elevated
+
+**Rule.** `query.failure_rate_elevated` (P2) — `q.failure_rate` above 5% for two
+consecutive days.
+
+**Diagnose.** Failures cluster; find the cluster before reading any individual
+query:
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["q.failure_rate","q.volume"],"dimensions":["error_class","warehouse"],"limit":25}' | jq '.rows'
+```
+
+| Error class | Meaning | Action |
+|---|---|---|
+| Timeout | Statement timeout hit | Either the query regressed (see the next section) or the timeout is too tight for the workload class |
+| Permission | A grant changed | Check the privilege-drift diff on the security page; a revoke is the usual cause |
+| Syntax / object not found | A deploy landed against a schema that had not migrated | Roll the deploy, not the warehouse |
+| Resource | Out of memory, or a spill that could not complete | Size up for that job, or fix the query — the spill leaderboard names it |
+
+A failure rate driven by one retrying job is a single defect, not a platform
+problem: check `q.volume` for the same slice before escalating.
+
+### Query performance has regressed
+
+**Rules.** `query.p95_latency_regression` (P3) — `q.p95_elapsed_ms` up more than 50%
+week over week — and `query.remote_spill_sustained` (P3) — `q.spill_remote_bytes`
+above 100 GiB on three consecutive days.
+
+Remote spill is the expensive kind: the working set did not fit in local SSD
+either, so the query is paying for object-storage round trips inside the plan.
+
+**Diagnose.**
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["q.p95_elapsed_ms","q.pruning_efficiency","q.spill_remote_bytes"],
+       "dimensions":["fingerprint"],"limit":20}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| Pruning efficiency collapsed on one fingerprint | The filter stopped matching the clustering key — usually a cast or a function wrapped around the partition column |
+| Spill with unchanged pruning | Data volume grew past the warehouse size. Size up for that workload, or split the job |
+| p95 up, p50 flat | A tail problem: one slice of the workload regressed, not all of it. Slice by team and by warehouse before touching the warehouse |
+| Both up across every fingerprint | Concurrency, not the queries — check the queueing section |
+
+### Storage is growing faster than expected
+
+**Rule.** `storage.growth_sustained` (P4) — `storage.growth_rate` above 5% a day for
+three consecutive days.
+
+**Diagnose.**
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["storage.growth_rate","storage.active_bytes"],"dimensions":["database"],"limit":25}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| One database, steady growth | Expected ingestion. Check it against the retention policy rather than the alert |
+| Growth without matching active bytes | Time Travel and Fail-safe. Review `storage.time_travel_ratio` and the retention on the largest tables |
+| Step change | A backfill, a clone, or a table rebuilt rather than merged | Confirm the clone group on the storage page; an orphan clone retains its whole base |
+
+Time Travel and Fail-safe sizing come from a storage snapshot that carries no time
+dimension, so they are reported on the storage page rather than alerted on — there
+is no series to compare windows of.
+
+### A pipeline is failing or late
+
+**Rules.** `pipeline.root_failures` (P2, fires on the first occurrence),
+`pipeline.dt_lag_breaches` (P2, two consecutive days), and
+`quality.freshness_sla_miss` (P2, two consecutive days). They share a section
+because they share a first question: *is anything downstream serving stale data
+as though it were fresh?*
+
+**Diagnose.**
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["pipe.root_failures","pipe.skipped_downstream"],"dimensions":["graph_root","error_class"],"limit":25}' | jq '.rows'
+curl -s "$APP_URL/api/v1/metrics/dq.freshness_sla_attainment/tile" | jq '{value, as_of, latency_floor_minutes}'
+```
+
+| Signal | Meaning | Action |
+|---|---|---|
+| Root failure with skipped downstream | Working as designed: the graph refused to run on stale inputs | Fix the root task; the skips resolve themselves |
+| Root failure with downstream still running | The dependency is not declared | A modelling defect — declare it, then re-run |
+| DT lag breached, refresh succeeding | `TARGET_LAG` is tighter than the refresh can achieve | Either relax the target or size the refresh warehouse; do not leave a target nobody meets |
+| DT lag breached, refreshes failing | Same failure as a task failure | Read the refresh error on the platform health page |
+| Freshness attainment falling with no failures | Refreshes are completing, just late | Look at queueing on the refresh warehouse before anything else |
+
+`pipe.repeat_failure_tasks` is the escalation signal: a task that fails, is fixed,
+and fails again is a design problem rather than an incident.
+
+### Failed logins have spiked
+
+**Rule.** `security.failed_login_spike` (P1) — robust z-score of `sec.failed_logins`.
+
+**Treat it as a security event until proven otherwise.** The scored condition
+exists because normal failure rates differ by an order of magnitude between
+accounts, so a spike means "unusual *for this account*".
+
+**Diagnose.**
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["sec.failed_logins"],"dimensions":["user","client_ip","error_class"],"limit":50}' | jq '.rows'
+```
+
+| Signal | Likely cause | Action |
+|---|---|---|
+| One user, one IP, many attempts | An expired credential in an automated job | Rotate it. Check the job did not log the password |
+| Many users, one IP | Credential stuffing | Escalate to security now; network-policy the source |
+| One user, many IPs | A distributed attempt, or a widely deployed client with a stale secret | Check the client type spread before deciding which |
+| Spread across users and IPs after a deploy | A client library upgrade changed the auth path | Correlate with `sec.single_factor_logins` and the deploy time |
+
+Cross-check `sec.privileged_grants` for the same window: a failed-login spike that
+precedes a new privileged grant is a different conversation.
+
+### A privileged grant appeared
+
+**Rule.** `security.privileged_grant_created` (P2) — a live grant of `ACCOUNTADMIN`,
+`SECURITYADMIN`, or `ORGADMIN`.
+
+These roles can change billing, read every object, and rewrite the access model.
+Every grant of one should be expected and short-lived; this alert is how you find
+out it was neither.
+
+**Diagnose.**
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["sec.privileged_grants"],"dimensions":["role","grantee","granted_by"],"limit":50}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| Grantee is a person, with a change record | Confirm the expiry. A standing ACCOUNTADMIN grant to a person is a finding |
+| Grantee is a service user | Almost always wrong. Service users need a scoped role, not an admin role |
+| Granted by an unexpected actor | Escalate. Check the privilege-drift diff for what else changed in the same window |
+| Grantee is disabled | `sec.disabled_but_granted_users` counts these — a disabled identity holding a live admin grant is a re-enable away from being live |
+
+The platform never revokes anything itself: it reports, and a human disposes (R8).
+
+### AI services credits have jumped
+
+**Rule.** `ai.credit_jump` (P3) — `ai.total_credits` more than doubled week over week.
+
+AI spend grows by adoption, so the useful question is *which function and which
+model*, not whether a ceiling was crossed.
+
+**Diagnose.**
+
+```bash
+curl -s -X POST "$APP_URL/api/v1/metrics/query" -H 'content-type: application/json' \
+  -d '{"metrics":["ai.total_credits","ai.tokens_per_credit"],"dimensions":["ai_function","ai_model"],"limit":25}' | jq '.rows'
+```
+
+| Signal | Action |
+|---|---|
+| One function, new this week | An adoption event. Confirm it is intended and budgeted, then leave it |
+| Same function, tokens per credit falling | A model change made the same work more expensive | Compare model choice against the task; the cheapest capable model is usually not the one someone reached for first |
+| Growth in an embedding or search workload | Often a re-index loop re-embedding unchanged rows | Check for idempotency before adding budget |
+
 
 ---
 
@@ -750,8 +1086,99 @@ Properties that are enforced in code:
 - **OFFLINE export.** `to_snowflake_alert_ddl(rule, warehouse=…)` emits deployable
   `CREATE ALERT` DDL carrying the tier and the runbook URL in its comments.
 
-**What does not exist yet:** no alert rules are declared in this repository, there
-is no alerts API or UI, and nothing evaluates rules on a schedule (the worker ships
-only `ping`). The operational alerting that is live today is the seven CloudWatch
-alarms above. When rules are authored, each must link to a section in this file, or
-it will not construct.
+### What is wired up
+
+**The declared rule set** lives in
+[`config/alert_rules.yaml`](../config/alert_rules.yaml): 18 rules spanning the four
+tiers and all nine KPI domains, each naming a metric, a condition, a scope, a
+window, a persistence count, a tier, a route, and a runbook link.
+`snowobs_analytics.rules.load_rule_set` parses and cross-validates it, and refuses
+to load a rule set where any of these is true:
+
+| Refusal | Why |
+|---|---|
+| The metric is not in the semantic layer | The rule would never fire and nobody would notice (R1) |
+| A `scope` key is not a dimension of that metric | The rule would evaluate something other than what it claims |
+| The metric sits on a snapshot entity | A rule compares windows; a snapshot has none |
+| A `route` names an undeclared channel | The rule would fire into nothing |
+| A `threshold` is an unquoted YAML number | It would reach `Decimal` already rounded (§27.7) |
+| An `anomaly` condition declares a non-daily window | The detector scores a daily series (§11.2) |
+| The `runbook` link is missing or malformed | §27.10 |
+
+**Runbook links are asserted, not trusted.** `runbook_problems()` parses this
+file's headings — skipping fenced code blocks, so a `# comment` in a shell block is
+not mistaken for a section — and a test fails the build if any rule points at an
+anchor that does not exist. That is why every rule above has a section under
+[Alert conditions](#alert-conditions).
+
+**Scheduled evaluation** runs in the worker as `evaluate_alert_rules`, registered
+in `WorkerSettings.functions` alongside `ping` and on a cron schedule derived from
+`ALERTING__EVALUATION_INTERVAL_MINUTES` (hourly by default, at seven minutes past).
+Each run:
+
+1. loads the rule set and, for each enabled rule, queries its metric through the
+   semantic compiler and the configured engine — never hand-written SQL, so LIVE
+   and OFFLINE evaluate the same definition (R1);
+2. skips any rule whose sources have not landed, logging the reason. A metric the
+   platform cannot compute produces **no alert**, never a firing on assumed zeros
+   (R3). The job result counts skips separately from non-firings, so "nothing
+   fired" and "nothing could be evaluated" do not look identical;
+3. replays the last `persistence` windows of the series into the engine, so the
+   streak that fires a rule is the one visible in the data rather than one
+   accumulated by however many times the job happened to run;
+4. dispatches whatever fires to the channels its route names, filtered by tier.
+
+**Channels** are `snowobs_analytics.channels`: a `WebhookChannel` (Slack blocks or
+a Teams `MessageCard`), an `EmailChannel` (SMTP; Amazon SES is configured as the
+relay in AWS deployments), and a `NullChannel` used when nothing is configured —
+which still logs the full payload, so a deployment without a webhook keeps a record
+of what would have been sent. Webhook URLs and SMTP passwords are held as secret
+*references* and resolved through the secrets adapter at the moment of dispatch;
+neither the value nor the endpoint ever reaches a log line (§17).
+
+**Nothing is sent until `ALERTING__ENABLED=true`.** Until then every rule still
+loads, evaluates, and backtests, and firings are logged through the null channel.
+Validate the rule set first; let it page people second.
+
+**The API** is `/api/v1/alerts`:
+
+```bash
+curl -s "$APP_URL/api/v1/alerts/rules" | jq '{rule_count, domains, dispatch_enabled}'
+curl -s "$APP_URL/api/v1/alerts/rules/warehouse.queue_overload" | jq .
+curl -s "$APP_URL/api/v1/alerts/prune-proposals" | jq '.proposals'
+curl -s -X POST "$APP_URL/api/v1/alerts/rules/cost.unattributed_share_high/backtest" | jq '.summary'
+curl -s "$APP_URL/api/v1/alerts/export/ddl?rule_id=pipeline.root_failures" | jq -r '.ddl'
+```
+
+There is deliberately no endpoint that creates or edits a rule. An alert rule
+decides what wakes somebody at 03:00; it belongs in version control and code
+review, not in a form.
+
+### What still does not exist
+
+- **PagerDuty and ServiceNow/Jira ticket creation are not implemented.** §14 lists
+  them as channels. What ships is webhook and email. A P1's `page` route and a P2's
+  `ticket` route are carried on the tier and shown in the API, but the delivery for
+  both is currently a webhook or an email — most PagerDuty and ServiceNow
+  deployments accept an inbound webhook, so the shipped `WebhookChannel` reaches
+  them, but there is no native integration, no incident deduplication against
+  PagerDuty's own key, and no ticket lifecycle. Do not read a P1 route as "somebody
+  has been paged" without checking where that channel actually points.
+- **Alert state is per process.** The dedup ledger and the per-rule statistics live
+  in the process that evaluated the rule; there is no Postgres event store yet.
+  A worker restart clears open alerts (the next run re-fires anything still
+  breaching, which is the safe direction), and the statistics the API reports are
+  the API process's own — which, for a rule only the worker evaluates, means zero.
+  See [`ASSUMPTIONS.md`](ASSUMPTIONS.md) A-24.
+- **Nothing records that a human acted.** `AlertEngine.acknowledge` exists and
+  drives the pruning proposal, but no endpoint calls it, because an acknowledgement
+  that only one process can see would be worse than none. Until the event store
+  lands, pruning proposals will not appear on their own; the backtest endpoint is
+  the practical way to find a rule that fires too often.
+- **Guardrail management** — drafting and applying resource monitors, statement
+  timeouts by workload class, auto-suspend policy, and Snowflake budgets (§14) — is
+  not built. When it is, production monitors are notify-only plus a P1: nothing in
+  this platform hard-suspends a production warehouse (§27.8).
+
+The seven CloudWatch alarms above remain the infrastructure-level alerting and are
+unaffected by any of this.

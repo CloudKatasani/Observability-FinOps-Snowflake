@@ -85,9 +85,9 @@ def test_the_parity_document_states_the_real_snapshot_count() -> None:
     """
     import re
 
-    document = (
-        Path(__file__).parents[3] / "docs" / "PARITY_EXCEPTIONS.md"
-    ).read_text(encoding="utf-8")
+    document = (Path(__file__).parents[3] / "docs" / "PARITY_EXCEPTIONS.md").read_text(
+        encoding="utf-8"
+    )
     match = re.search(r"\((\d+) files: (\d+) metrics × 2 dialects\)", document)
     assert match, "PARITY_EXCEPTIONS.md no longer states a snapshot count in the expected form"
 

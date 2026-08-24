@@ -1,0 +1,354 @@
+# Declared alert rules (BUILD_PROMPT §14).
+#
+# This file is deploy-editable configuration, not code. It is loaded and
+# validated by `snowobs_analytics.rules.load_rule_set`, which refuses to start
+# on anything that would produce noise:
+#
+#   * `metric` must name a metric that exists in the semantic layer;
+#   * `scope` keys must be dimensions that metric can actually be sliced by;
+#   * `route` names must be channels declared below;
+#   * `runbook` must resolve to a heading that exists in docs/RUNBOOK.md
+#     (asserted by test_alert_rules.py — a rule nobody knows how to action is
+#     noise by construction, §27.10);
+#   * `threshold` must be quoted, so it parses as Decimal and never as a float
+#     (§27.7). Credits and currency are exact or they are wrong.
+#
+# `window` is the width of one evaluation window: `day`, `week`, or `month`.
+# `persistence` is how many consecutive windows must breach before the rule
+# fires — magnitude without persistence is noise (§11.2).
+#
+# Tiers and their handling are fixed by §14: P1 page + chat, ack 15 minutes ·
+# P2 chat + ticket, same business day · P3 team channel, weekly triage ·
+# P4 monthly digest.
+#
+# Nothing here is sent anywhere until ALERTING__ENABLED=true. Until then the
+# rules are still listed, backtested, and exportable as Snowflake ALERT DDL —
+# validate the rule set first, let it page people second.
+
+version: 1
+
+# --------------------------------------------------------------- channels ---
+# `secret_ref` is a *reference*, resolved by the secrets adapter at the moment
+# of dispatch (SECRETS__PROVIDER). Webhook URLs and SMTP passwords are secrets
+# under §17: they never appear here, in Postgres, or in a log line.
+channels:
+  - name: platform-chat
+    kind: webhook
+    flavour: slack
+    description: The platform team's incident channel.
+    url_secret_ref: env://SNOWOBS_ALERT_WEBHOOK_PLATFORM
+    tiers: [P1, P2, P3]
+
+  - name: finops-chat
+    kind: webhook
+    flavour: teams
+    description: The FinOps channel, where cost and waste findings are triaged.
+    url_secret_ref: env://SNOWOBS_ALERT_WEBHOOK_FINOPS
+    tiers: [P2, P3, P4]
+
+  - name: oncall-email
+    kind: email
+    description: >
+      Paging path for P1 and P2. Amazon SES is configured as the SMTP relay in
+      AWS deployments; any SMTP server works locally.
+    sender: snowobs-alerts@example.invalid
+    recipients: [platform-oncall@example.invalid]
+    smtp_host: localhost
+    smtp_port: 587
+    smtp_username: snowobs
+    smtp_password_secret_ref: env://SNOWOBS_ALERT_SMTP_PASSWORD
+    tiers: [P1, P2]
+
+  - name: finops-digest
+    kind: email
+    description: The P4 monthly digest. Informational, never interrupting.
+    sender: snowobs-alerts@example.invalid
+    recipients: [finops@example.invalid]
+    smtp_host: localhost
+    smtp_port: 587
+    smtp_username: snowobs
+    smtp_password_secret_ref: env://SNOWOBS_ALERT_SMTP_PASSWORD
+    tiers: [P3, P4]
+
+# ------------------------------------------------------------------ rules ---
+rules:
+  # ---- cost -----------------------------------------------------------------
+  - id: cost.daily_spend_anomaly
+    name: Daily compute spend anomaly
+    metric: cost.billed_credits
+    condition: anomaly
+    threshold: "3.5"
+    scope: {service_type: WAREHOUSE_METERING}
+    window: day
+    persistence: 2
+    tier: P1
+    route: [platform-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#daily-spend-has-spiked
+    description: >
+      Robust z-score of daily billed warehouse credits against a
+      seasonality-adjusted baseline. A threshold cannot express "unusual for a
+      Tuesday", which is why this one rule is scored rather than fixed (§11.2).
+
+  - id: cost.budget_breach
+    name: Month-to-date credits over budget
+    metric: chargeback.budget_variance_credits
+    condition: above
+    threshold: "40000"
+    scope: {service_type: WAREHOUSE_METERING}
+    window: month
+    persistence: 1
+    tier: P2
+    route: [finops-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#spend-is-tracking-over-budget
+    description: >
+      Month-to-date billed compute credits against the configured budget. The
+      threshold is the metric's declared warn level and is a placeholder per
+      deployment, not a recommendation — set it to the account's real budget.
+
+  - id: cost.unattributed_share_high
+    name: Unattributed spend above target
+    metric: cost.unattributed_share
+    condition: above
+    threshold: "0.15"
+    window: week
+    persistence: 2
+    tier: P3
+    route: [finops-chat]
+    runbook: /docs/RUNBOOK.md#unattributed-cost-is-above-target
+    description: >
+      Share of attributed credits carrying no team tag, at the metric's own
+      critical level. Two consecutive weeks, because tagging coverage moves
+      with deployments and a single bad week self-corrects.
+
+  - id: cost.cloud_services_ratio_high
+    name: Cloud services ratio above the rebate line
+    metric: cost.cloud_services_ratio
+    condition: above
+    threshold: "0.10"
+    window: week
+    persistence: 2
+    tier: P4
+    route: [finops-digest]
+    runbook: /docs/RUNBOOK.md#the-cloud-services-ratio-is-too-high
+    description: >
+      Above 10% of compute the excess cloud-services credits become billable.
+      Informational: the fix is a query-pattern change, not an incident.
+
+  # ---- warehouse ------------------------------------------------------------
+  - id: warehouse.idle_share_sustained
+    name: Sustained idle credit share
+    metric: wh.idle_pct
+    condition: above
+    threshold: "0.60"
+    window: day
+    persistence: 7
+    tier: P3
+    route: [platform-chat]
+    runbook: /docs/RUNBOOK.md#a-warehouse-is-burning-idle-credits
+    description: >
+      Seven consecutive days above the metric's critical level. A week is the
+      right persistence: idle share is spiky by nature and a single day of it
+      is a batch window, not waste.
+
+  - id: warehouse.queue_overload
+    name: Warehouse queueing on overload
+    metric: wh.queue_overload_pct
+    condition: above
+    threshold: "0.15"
+    window: day
+    persistence: 2
+    tier: P2
+    route: [platform-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#a-warehouse-is-queueing
+    description: >
+      Share of elapsed time spent queued for an overloaded warehouse. Two days
+      running means the workload has outgrown the size or the cluster count,
+      not that one report ran at a bad moment.
+
+  - id: warehouse.zombie_credits
+    name: Credits burned with no queries
+    metric: wh.zombie_credits
+    condition: above
+    threshold: "5"
+    window: week
+    persistence: 2
+    tier: P3
+    route: [finops-chat]
+    runbook: /docs/RUNBOOK.md#a-warehouse-is-burning-idle-credits
+    description: >
+      Credits metered in hours where no query was attributed at all. Two weeks
+      running is a warehouse nobody is using and nobody has suspended.
+
+  # ---- query ----------------------------------------------------------------
+  - id: query.failure_rate_elevated
+    name: Query failure rate elevated
+    metric: q.failure_rate
+    condition: above
+    threshold: "0.05"
+    window: day
+    persistence: 2
+    tier: P2
+    route: [platform-chat]
+    runbook: /docs/RUNBOOK.md#query-failures-are-elevated
+    description: >
+      More than one query in twenty failing, two days running. Below that a
+      failure rate is usually a single misconfigured job retrying.
+
+  - id: query.p95_latency_regression
+    name: p95 query latency regression
+    metric: q.p95_elapsed_ms
+    condition: delta_above
+    threshold: "0.50"
+    window: week
+    persistence: 1
+    tier: P3
+    route: [platform-chat]
+    runbook: /docs/RUNBOOK.md#query-performance-has-regressed
+    description: >
+      p95 elapsed time up more than half against the previous week. Week over
+      week rather than day over day, because p95 on a light day is not
+      comparable to p95 on a batch day.
+
+  - id: query.remote_spill_sustained
+    name: Sustained remote spill
+    metric: q.spill_remote_bytes
+    condition: above
+    threshold: "107374182400"
+    window: day
+    persistence: 3
+    tier: P3
+    route: [platform-chat]
+    runbook: /docs/RUNBOOK.md#query-performance-has-regressed
+    description: >
+      More than 100 GiB spilled to remote storage on three consecutive days.
+      Remote spill is the expensive kind: it means the working set did not fit
+      in local SSD either.
+
+  # ---- storage --------------------------------------------------------------
+  - id: storage.growth_sustained
+    name: Storage growing faster than expected
+    metric: storage.growth_rate
+    condition: above
+    threshold: "0.05"
+    window: day
+    persistence: 3
+    tier: P4
+    route: [finops-digest]
+    runbook: /docs/RUNBOOK.md#storage-is-growing-faster-than-expected
+    description: >
+      Active bytes growing more than 5% a day for three consecutive days. A
+      retention or ingestion review, not an incident — hence P4 and the
+      monthly digest. Time Travel and Fail-safe sizing is reviewed alongside
+      it; the storage snapshot those come from carries no time dimension, so
+      it is a report rather than an alertable series.
+
+  # ---- pipeline -------------------------------------------------------------
+  - id: pipeline.root_failures
+    name: Task graph failing at its root
+    metric: pipe.root_failures
+    condition: above
+    threshold: "0"
+    window: day
+    persistence: 1
+    tier: P2
+    route: [platform-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#a-pipeline-is-failing-or-late
+    description: >
+      A root task failed, so everything downstream of it was skipped rather
+      than run on stale inputs. Fires on the first occurrence: this one is
+      never noise.
+
+  - id: pipeline.dt_lag_breaches
+    name: Dynamic table behind its target lag
+    metric: pipe.dt_lag_breaches
+    condition: above
+    threshold: "0"
+    window: day
+    persistence: 2
+    tier: P2
+    route: [platform-chat]
+    runbook: /docs/RUNBOOK.md#a-pipeline-is-failing-or-late
+    description: >
+      A dynamic table refreshed slower than its declared TARGET_LAG on two
+      consecutive days. One day can be a backfill; two is the lag target being
+      wrong or the warehouse being too small.
+
+  # ---- quality --------------------------------------------------------------
+  - id: quality.freshness_sla_miss
+    name: Freshness SLA attainment below target
+    metric: dq.freshness_sla_attainment
+    condition: below
+    threshold: "0.95"
+    window: day
+    persistence: 2
+    tier: P2
+    route: [platform-chat]
+    runbook: /docs/RUNBOOK.md#a-pipeline-is-failing-or-late
+    description: >
+      Fewer than 95% of refreshes inside their declared lag, two days running.
+      This is the KPI consumers of a data product actually feel.
+
+  # ---- security -------------------------------------------------------------
+  - id: security.failed_login_spike
+    name: Failed login spike
+    metric: sec.failed_logins
+    condition: anomaly
+    threshold: "3.5"
+    window: day
+    persistence: 1
+    tier: P1
+    route: [platform-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#failed-logins-have-spiked
+    description: >
+      Robust z-score of daily failed logins. Scored rather than fixed because
+      the normal rate differs by an order of magnitude between accounts, and a
+      fixed threshold is either deaf or permanently on.
+
+  - id: security.privileged_grant_created
+    name: Privileged role granted
+    metric: sec.privileged_grants
+    condition: above
+    threshold: "0"
+    window: day
+    persistence: 1
+    tier: P2
+    route: [platform-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#a-privileged-grant-appeared
+    description: >
+      A live grant of ACCOUNTADMIN, SECURITYADMIN, or ORGADMIN. Every one of
+      these should be expected and short-lived; the alert is how you find out
+      it was neither.
+
+  # ---- ai -------------------------------------------------------------------
+  - id: ai.credit_jump
+    name: AI services credits jumped
+    metric: ai.total_credits
+    condition: delta_above
+    threshold: "1.00"
+    window: week
+    persistence: 1
+    tier: P3
+    route: [finops-chat]
+    runbook: /docs/RUNBOOK.md#ai-services-credits-have-jumped
+    description: >
+      Cortex credits more than doubled against the previous week. AI spend
+      grows by adoption rather than by drift, so the useful question is which
+      function and which model — not whether a fixed ceiling was crossed.
+
+  # ---- chargeback -----------------------------------------------------------
+  - id: chargeback.reconciliation_drift
+    name: Reconciliation variance behaving unusually
+    metric: chargeback.reconciliation_variance
+    condition: anomaly
+    threshold: "3.5"
+    window: day
+    persistence: 2
+    tier: P2
+    route: [finops-chat, oncall-email]
+    runbook: /docs/RUNBOOK.md#the-reconciliation-gate-is-red
+    description: >
+      Metered compute minus attributable compute. The gap itself is expected
+      (idle time, sub-100 ms queries, Adaptive Warehouse jobs), so a fixed
+      threshold would be arbitrary; what matters is the gap changing shape,
+      which means the attribution view has stopped seeing part of the workload
+      and chargeback is about to stop reconciling (R6).

@@ -246,6 +246,48 @@ All notable changes to this project are documented here. The format follows
   `DEMO.md`, `AWS_COST.md`, and a `USER_GUIDE.md` written for the FinOps analyst
   rather than the engineer.
 
+### Added — Phase 8b (Alerting, wired up)
+
+- **A declared rule set** (`config/alert_rules.yaml`): 18 rules spanning §14's four
+  tiers and all nine KPI domains, each naming a metric, a condition (threshold,
+  delta, or anomaly score), a scope, an evaluation window, a persistence count, a
+  tier, a route, and a runbook URL.
+- **Rule loader and validator** (`snowobs_analytics.rules`): refuses a rule whose
+  metric the semantic layer does not define, whose scope names a dimension the
+  metric cannot be sliced by, whose metric sits on a snapshot entity with no
+  windows to compare, whose route names an undeclared channel, whose threshold is
+  an unquoted YAML float (§27.7), or whose anomaly condition declares a non-daily
+  window. `runbook_problems()` parses `docs/RUNBOOK.md`'s headings — skipping
+  fenced code blocks — and a test fails the build on any rule pointing at an
+  anchor that does not exist (§27.10).
+- **Notification channels** (`snowobs_analytics.channels`): an adapter protocol
+  with a `WebhookChannel` (Slack blocks / Teams `MessageCard`), an `EmailChannel`
+  (SMTP; SES as the relay on AWS), and a `NullChannel` that still records the
+  firing when nothing is configured. Payloads carry KPI, value, threshold, scope,
+  and runbook link — and **cannot** be constructed carrying query text (§14),
+  which is asserted rather than reviewed.
+- **Secrets adapter** (`snowobs_common.secrets`): env, file, and AWS Secrets
+  Manager providers behind one protocol. Webhook URLs and SMTP passwords are held
+  as references and resolved at the moment of dispatch; a failed resolution names
+  the reference and never the value (§17).
+- **Scheduled evaluation** (`snowobs_worker.alerts.evaluate_alert_rules`):
+  registered in the worker's job registry alongside `ping` and on a cron schedule
+  derived from `ALERTING__EVALUATION_INTERVAL_MINUTES`. It queries each rule's
+  metric through the semantic compiler and the configured engine — never
+  hand-written SQL — applies persistence from the data rather than from process
+  memory, dedups, and dispatches. A metric that cannot be computed produces a
+  logged reason and no alert, never a firing on assumed zeros (R3).
+- **`/api/v1/alerts`**: rule list with per-rule fire/action/suppression statistics
+  and the channels each rule's tier actually reaches, single-rule fetch, pruning
+  proposals, an isolated backtest (rule + window → what it would have fired, with
+  the SQL it replayed), and the OFFLINE `CREATE ALERT` DDL export. There is
+  deliberately no endpoint that writes a rule.
+- **`docs/RUNBOOK.md`**: a new "Alert conditions" section with one entry per
+  declared rule — symptom, diagnosis commands against real endpoints, a
+  signal/action table, and what *not* to do. The alert-engine section now
+  describes what exists and states plainly what does not (A-24, A-25).
+- New settings: `ALERTING__*` and `SECRETS__FILE_PATH` (§21).
+
 ### Deferred (recorded, not stubbed)
 
 - Everything deferred in earlier phases has landed. The remaining limitations
@@ -253,3 +295,8 @@ All notable changes to this project are documented here. The format follows
   rationale and the trigger that should prompt a revisit — notably the sources
   the fixture generator does not land (`remaining_balance_daily`, `TABLES`),
   which make two metrics read a documented proxy rather than the ideal column.
+- Alerting ships webhook and email channels; **PagerDuty and ServiceNow/Jira
+  ticket creation are not implemented**, and neither is §14's guardrail
+  management (resource monitors, statement timeouts, auto-suspend policy,
+  budgets) — both recorded as A-25. Alert dedup state and per-rule statistics
+  are per-process, and no endpoint records that a human acted on a firing (A-24).

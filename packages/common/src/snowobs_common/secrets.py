@@ -11,7 +11,7 @@ Three providers, selected by ``SECRETS__PROVIDER``:
 ``env``
     Reads a process environment variable. The mapping is injected rather than
     read ambiently, so the one ``os.environ`` reference outside the settings
-    module is here and is auditable (A-14).
+    module is here and is auditable (A-26).
 ``file``
     Reads a JSON object from a local file, for laptops and air-gapped installs.
     The file is the deployment's own secret store; the app only reads it.
