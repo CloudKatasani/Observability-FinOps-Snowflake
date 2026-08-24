@@ -1,10 +1,56 @@
 @import "tailwindcss";
 
+/* Brand colours are configuration (config/branding.yaml), delivered by
+   GET /api/v1/meta and applied as custom properties by the app shell. The
+   fallbacks below are neutral greys so an unbranded build never invents a
+   brand. Semantic status colours are deliberately not defined here — they
+   must stay distinct from the brand palette (§16.3). */
+:root {
+  --brand-navy: #1e293b;
+  --brand-primary: #475569;
+  --brand-sky: #94a3b8;
+  --brand-coral: #64748b;
+}
+
 /* Figures are always tabular so columns of numbers align (BUILD_PROMPT §16.3). */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
+/* Every figure in the product is set in tabular figures, including those inside
+   tables and definition lists that do not carry the utility class. */
+table,
+dd,
+output {
+  font-variant-numeric: tabular-nums;
+}
+
 body {
-  @apply bg-white text-slate-900 antialiased;
+  @apply bg-slate-100 text-slate-900 antialiased;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+}
+
+code,
+pre,
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* A visible focus ring everywhere, including in browsers that would otherwise
+   drop it on click-then-keyboard interaction (WCAG 2.4.7). */
+:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

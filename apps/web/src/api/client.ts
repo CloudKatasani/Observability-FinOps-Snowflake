@@ -166,6 +166,15 @@ export const reconciliationSchema = z.object({
 });
 export type Reconciliation = z.infer<typeof reconciliationSchema>;
 
+/** One statement behind the allocation, and what it contributes (R5). */
+export const sqlDisclosureSchema = z.object({
+  purpose: z.string(),
+  metrics: z.array(z.string()),
+  dimensions: z.array(z.string()),
+  sql: z.string(),
+});
+export type SqlDisclosure = z.infer<typeof sqlDisclosureSchema>;
+
 export const allocationSchema = provenanceSchema.extend({
   period_start: z.string(),
   period_end: z.string(),
@@ -176,6 +185,8 @@ export const allocationSchema = provenanceSchema.extend({
   reconciliation: reconciliationSchema,
   //: R6 — the gate's verdict. False means the figures are withheld.
   figures_published: z.boolean(),
+  //: R5 — an allocation is several metric queries, and all of them are shown.
+  sql: z.array(sqlDisclosureSchema),
 });
 export type Allocation = z.infer<typeof allocationSchema>;
 
@@ -308,4 +319,112 @@ export async function fetchCoverage(): Promise<CoverageMatrix> {
 /** The source registry — documented latencies live here, never in the UI (R7). */
 export async function fetchSources(): Promise<SourceSummary[]> {
   return z.array(sourceSummarySchema).parse(await getJson("/api/v1/sources"));
+}
+
+// ------------------------------------------------------------------- agents
+// An agent answer is held to the same standard as a dashboard figure: it
+// arrives with the SQL, the metrics, and the sources behind it, and the UI
+// shows them (R5). `grounded` says whether any tool result backs the answer at
+// all — an ungrounded answer is never presented as a finding.
+
+export const agentInfoSchema = z.object({
+  name: z.string(),
+  description: z.string(),
+  tools: z.array(z.string()),
+});
+export type AgentInfo = z.infer<typeof agentInfoSchema>;
+
+export const traceStepSchema = z.object({
+  kind: z.string(),
+  summary: z.string(),
+  elapsed_ms: z.number().nullish(),
+  detail: z.record(z.string(), z.unknown()).default({}),
+});
+export type TraceStep = z.infer<typeof traceStepSchema>;
+
+export const agentAnswerSchema = z.object({
+  answer: z.string(),
+  agent: z.string(),
+  grounded: z.boolean(),
+  refused: z.boolean(),
+  refusal_reason: z.string().nullish(),
+  metrics_used: z.array(z.string()),
+  sources_used: z.array(z.string()),
+  sql: z.array(z.string()),
+  trace_id: z.string(),
+  steps: z.array(traceStepSchema),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+});
+export type AgentAnswer = z.infer<typeof agentAnswerSchema>;
+
+/** The specialists available and the tools each may reach for (§12.2). */
+export async function fetchAgents(): Promise<AgentInfo[]> {
+  return z.array(agentInfoSchema).parse(await getJson("/api/v1/agents/catalog"));
+}
+
+/** Ask one question. The supervisor routes it unless an agent is named. */
+export async function askAgent(question: string, agent?: string): Promise<AgentAnswer> {
+  return agentAnswerSchema.parse(
+    await postJson("/api/v1/agents/ask", { question, agent: agent ?? null }),
+  );
+}
+
+/** One event from the streaming endpoint: a trace step, or the final answer. */
+export const agentStreamEventSchema = z.object({ event: z.string() }).passthrough();
+export type AgentStreamEvent = z.infer<typeof agentStreamEventSchema>;
+
+/**
+ * Stream a turn, yielding each event as it arrives.
+ *
+ * `fetch` is used rather than `EventSource` because the question is a POST
+ * body; EventSource is GET-only, and putting a free-text question in a query
+ * string would put it in every proxy access log along the way.
+ */
+export async function* streamAgent(
+  question: string,
+  agent?: string,
+  signal?: AbortSignal,
+): AsyncGenerator<AgentStreamEvent> {
+  const response = await fetch("/api/v1/agents/stream", {
+    method: "POST",
+    headers: {
+      accept: "text/event-stream",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ question, agent: agent ?? null }),
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new ApiError(
+      response.status,
+      `POST /api/v1/agents/stream failed with ${response.status}`,
+    );
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      // SSE frames are separated by a blank line; a frame split across two
+      // chunks must not be parsed until the rest of it arrives.
+      const frames = buffered.split("\n\n");
+      buffered = frames.pop() ?? "";
+      for (const frame of frames) {
+        const payload = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice("data: ".length))
+          .join("");
+        if (!payload) continue;
+        yield agentStreamEventSchema.parse(JSON.parse(payload));
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }

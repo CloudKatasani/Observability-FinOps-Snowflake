@@ -40,6 +40,8 @@ interface CategoryChartInput {
   palette: BrandPalette;
   categories: string[];
   series: { name: string; values: (number | null)[] }[];
+  /** Stack every series into one bar per category, e.g. cost components. */
+  stacked?: boolean;
   /** Renders the tooltip value from the exact API string, never from the plot number. */
   valueLabel: (seriesName: string, index: number) => string;
   categoryLabel?: AxisLabelFormatter;
@@ -58,7 +60,8 @@ function baseTextStyle() {
  * fed the API's own decimal string.
  */
 export function categoryChartOption(input: CategoryChartInput): EChartsOption {
-  const { palette, categories, series, valueLabel, categoryLabel, horizontal, kind } = input;
+  const { palette, categories, series, valueLabel, categoryLabel, horizontal, kind, stacked } =
+    input;
   const isBar = kind !== "line";
 
   const valueAxis = {
@@ -126,6 +129,7 @@ export function categoryChartOption(input: CategoryChartInput): EChartsOption {
       name: entry.name,
       type: isBar ? ("bar" as const) : ("line" as const),
       data: entry.values,
+      stack: stacked && isBar ? "total" : undefined,
       barMaxWidth: 28,
       smooth: false,
       symbol: "circle",

@@ -19,9 +19,17 @@ interface ProvenanceBarProps {
   registry?: Map<string, SourceSummary>;
   /** Names the figure in the disclosure label, e.g. "Total credits consumed". */
   label: string;
+  /** Shown when the endpoint returned no SQL — says why, and where to get it. */
+  noSqlNote?: string;
 }
 
-export default function ProvenanceBar({ provenance, sql, registry, label }: ProvenanceBarProps) {
+export default function ProvenanceBar({
+  provenance,
+  sql,
+  registry,
+  label,
+  noSqlNote = "This response carried no compiled SQL.",
+}: ProvenanceBarProps) {
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -72,7 +80,7 @@ export default function ProvenanceBar({ provenance, sql, registry, label }: Prov
             </button>
           </div>
           <pre className="mt-1 max-h-64 overflow-auto rounded border border-slate-200 bg-white p-2 font-mono text-[11px] leading-relaxed break-words whitespace-pre-wrap text-slate-800">
-            {sql || "No SQL was executed — the metric was answered from its coverage state."}
+            {sql || noSqlNote}
           </pre>
 
           <p className="mt-2 text-[11px] font-semibold tracking-wide text-slate-600 uppercase">

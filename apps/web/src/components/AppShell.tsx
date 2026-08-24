@@ -11,6 +11,7 @@ const NAV = [
   { to: "/health", label: "Platform health", hint: "Freshness, failures, contention" },
   { to: "/chargeback", label: "Chargeback", hint: "Allocated cost by team" },
   { to: "/coverage", label: "Coverage & sources", hint: "What landed and what is missing" },
+  { to: "/ask", label: "Ask", hint: "Question the governed metrics directly" },
   { to: "/status", label: "System status", hint: "API and backing services" },
 ] as const;
 

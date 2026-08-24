@@ -109,6 +109,16 @@ export function formatCredits(raw: unknown, decimals = 1): string | null {
   return formatFigure(raw, "number", decimals);
 }
 
+/** Render an already-parsed exact value, e.g. a total summed across buckets. */
+export function formatDecimalValue(value: Decimal, decimals = 1): string {
+  return fixedGrouped(value, decimals);
+}
+
+/** Render an already-parsed *fraction* as a percentage. */
+export function formatDecimalPercent(value: Decimal, decimals = 1): string {
+  return `${fixedGrouped(shiftPoint(value, 2), decimals)}%`;
+}
+
 /** A percentage the API already expressed in percent units (not a fraction). */
 export function formatPercentPoints(raw: unknown, decimals = 3): string | null {
   const value = parseDecimal(raw);
@@ -145,6 +155,43 @@ export function formatClockTime(isoTimestamp: string): string {
 export function formatIsoDate(value: string | null | undefined): string {
   if (!value) return "";
   return value.slice(0, 10);
+}
+
+const MONTH_NAMES = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+/**
+ * Axis label for a `TIME_BUCKET` value. The string is split rather than parsed
+ * through `Date`, because the API sends a naive bucket boundary and shifting it
+ * into the reader's timezone would move figures between days.
+ */
+export function formatBucketLabel(bucket: string, grain: "hour" | "day" | "week" | "month"): string {
+  const [datePart, timePart = ""] = bucket.split("T");
+  const [year, month, day] = datePart.split("-");
+  const monthName = MONTH_NAMES[Number(month) - 1] ?? month;
+  if (!year || !month) return bucket;
+  switch (grain) {
+    case "month":
+      return `${monthName} ${year}`;
+    case "hour":
+      return `${day} ${monthName} ${timePart.slice(0, 5)}`;
+    case "week":
+    case "day":
+    default:
+      return `${day} ${monthName}`;
+  }
 }
 
 /** The bare view name from a fully qualified Snowflake object. */

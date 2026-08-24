@@ -13,6 +13,28 @@ export default defineConfig({
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
+  build: {
+    // The chart vendor chunk is deliberately one cached file rather than many
+    // lazy ones: this is an analytical tool people keep open for hours, so a
+    // single cold download beats a stall on every chart.
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        // The chart library is the largest dependency and changes far less
+        // often than the app; giving it its own chunk keeps it cached across
+        // deployments and the app chunk small.
+        manualChunks: {
+          echarts: [
+            "echarts/core",
+            "echarts/charts",
+            "echarts/components",
+            "echarts/renderers",
+            "echarts-for-react/lib/core",
+          ],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {

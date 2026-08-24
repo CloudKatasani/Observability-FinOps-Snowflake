@@ -33,10 +33,15 @@ function registryIndex(
 /**
  * Reduce every provenance block on a page to one honest sentence.
  *
- * The slowest source is chosen by its *documented* latency from the registry,
- * falling back to the order the API listed its sources when a source id is not
- * in the registry (an unregistered source cannot be ranked, so it is named only
- * if nothing else can be).
+ * Two figures compete for the floor: the `latency_floor_minutes` each response
+ * declares, and the documented latency the registry holds for the source views
+ * those responses read. They can disagree — a metric may declare a tighter
+ * floor than one of its own inputs promises — and when they do, the *larger*
+ * wins. Understating staleness would be the one failure R7 exists to prevent.
+ *
+ * The named source is the one that justifies the floor shown. When the registry
+ * has not loaded and the floor cannot be attributed to a specific view, the
+ * sentence states the floor without naming a source rather than guessing.
  */
 export function summariseFreshness(
   contributions: readonly (Provenance | undefined | null)[],
@@ -56,21 +61,33 @@ export function summariseFreshness(
   const asOf = present
     .map((entry) => entry.as_of)
     .reduce((oldest, current) => (current < oldest ? current : oldest));
-  const latencyFloorMinutes = Math.max(...present.map((entry) => entry.latency_floor_minutes));
+  const declaredFloor = Math.max(...present.map((entry) => entry.latency_floor_minutes));
   const provisional = present.some((entry) => entry.provisional);
 
   const index = registryIndex(sources);
-  const contributingIds = new Set(present.flatMap((entry) => entry.sources));
+  const contributingIds = [...new Set(present.flatMap((entry) => entry.sources))];
 
-  let slowestSource: string | null = null;
-  let slowestLatency = -1;
+  let registryFloor = Number.NEGATIVE_INFINITY;
+  let registrySource: string | null = null;
   for (const id of contributingIds) {
     const definition = index.get(id);
-    const latency = definition?.documented_latency_minutes ?? -1;
-    if (latency > slowestLatency) {
-      slowestLatency = latency;
-      slowestSource = definition ? shortObjectName(definition.snowflake_object) : id.toUpperCase();
+    if (!definition) continue;
+    if (definition.documented_latency_minutes > registryFloor) {
+      registryFloor = definition.documented_latency_minutes;
+      registrySource = shortObjectName(definition.snowflake_object);
     }
+  }
+
+  let latencyFloorMinutes = declaredFloor;
+  let slowestSource: string | null = null;
+  if (registrySource !== null && registryFloor >= declaredFloor) {
+    latencyFloorMinutes = registryFloor;
+    slowestSource = registrySource;
+  } else if (contributingIds.length === 1) {
+    // One input, so the floor is unambiguously its own even without the registry.
+    slowestSource = index.has(contributingIds[0])
+      ? shortObjectName(index.get(contributingIds[0])!.snowflake_object)
+      : contributingIds[0].toUpperCase();
   }
 
   const attribution = slowestSource ? ` (${slowestSource})` : "";

@@ -7,7 +7,7 @@
 
 import type { Cell, MetricQueryResponse } from "@/api/client";
 import type { Decimal } from "@/lib/decimal";
-import { compareDecimals, sumDecimals } from "@/lib/decimal";
+import { compareDecimals, parseDecimal, sumDecimals } from "@/lib/decimal";
 
 export const TIME_BUCKET = "TIME_BUCKET";
 
@@ -71,6 +71,38 @@ export function groupTotals(
   return options.limit ? totals.slice(0, options.limit) : totals;
 }
 
+/**
+ * The single worst (largest) bucket value per group.
+ *
+ * Ratios must never be added together, so a per-group figure for a percentage
+ * metric is reported as the worst period it reached, not as a sum. Callers are
+ * expected to label it that way.
+ */
+export function peakByGroup(
+  response: MetricQueryResponse,
+  dimension: string,
+  metricId: string,
+  options: { limit?: number } = {},
+): GroupTotal[] {
+  const keyIndex = indexOfColumn(response, dimension);
+  const valueIndex = indexOfColumn(response, metricColumn(metricId));
+  if (keyIndex < 0 || valueIndex < 0) return [];
+
+  const peaks = new Map<string, Decimal>();
+  for (const row of response.rows) {
+    const parsed = parseDecimal(row[valueIndex] ?? null);
+    if (!parsed) continue;
+    const rawKey = row[keyIndex];
+    const key = rawKey === null || rawKey === undefined ? "—" : String(rawKey);
+    const current = peaks.get(key);
+    if (!current || compareDecimals(parsed, current) > 0) peaks.set(key, parsed);
+  }
+
+  const results = [...peaks.entries()].map(([key, total]) => ({ key, total }));
+  results.sort((a, b) => compareDecimals(b.total, a.total));
+  return options.limit ? results.slice(0, options.limit) : results;
+}
+
 export interface BucketPoint {
   bucket: string;
   value: Decimal | null;
@@ -108,6 +140,34 @@ export function timeSeries(response: MetricQueryResponse, metricId: string): Buc
         raw: known.length > 0 ? known[0] : null,
       };
     });
+}
+
+export interface AlignedSeries {
+  /** Every time bucket present in the response, oldest first. */
+  buckets: string[];
+  /** Metric id → one value per bucket, `null` where the API returned nothing. */
+  values: Record<string, (Decimal | null)[]>;
+}
+
+/**
+ * Several metrics from one response, aligned on a shared bucket axis, so a
+ * multi-series chart never pairs a value with the wrong period.
+ */
+export function alignedTimeSeries(
+  response: MetricQueryResponse,
+  metricIds: readonly string[],
+): AlignedSeries {
+  const perMetric = metricIds.map((id) => ({
+    id,
+    points: new Map(timeSeries(response, id).map((point) => [point.bucket, point.value])),
+  }));
+
+  const buckets = [...new Set(perMetric.flatMap(({ points }) => [...points.keys()]))].sort();
+  const values: Record<string, (Decimal | null)[]> = {};
+  for (const { id, points } of perMetric) {
+    values[id] = buckets.map((bucket) => points.get(bucket) ?? null);
+  }
+  return { buckets, values };
 }
 
 /** Rows as objects keyed by upper-case column name — handy for small tables. */

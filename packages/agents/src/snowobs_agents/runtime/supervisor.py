@@ -474,10 +474,20 @@ class AgentRuntime:
         yield {
             "event": "answer",
             "answer": result.answer,
+            "agent": agent.name,
             "trace_id": result.trace.id,
             "grounded": result.grounded,
+            # A consumer must not have to infer a refusal from `grounded`: a
+            # refusal and an answer that merely used no tools are different
+            # things, and only one of them should be shown as a finding.
+            "refused": result.refused,
+            "refusal_reason": result.trace.refusal_reason,
             "metrics": result.trace.metrics_used,
             "sources": result.trace.sources_used,
+            # R5 has to survive streaming. Without the SQL on the final frame a
+            # streaming client would have to re-ask the non-streaming endpoint
+            # to show its work — running every query a second time.
+            "sql": result.sql_shown,
         }
 
 

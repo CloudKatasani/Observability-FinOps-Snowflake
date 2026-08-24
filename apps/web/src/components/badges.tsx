@@ -1,7 +1,7 @@
 // Status is always carried by a word and a glyph as well as a colour, so the
 // meaning survives greyscale, colour blindness, and a screen reader (§16.2).
 
-export type Tone = "good" | "warn" | "bad" | "info" | "muted";
+import type { Tone } from "@/lib/status";
 
 const TONE_CLASSES: Record<Tone, string> = {
   good: "border-emerald-300 bg-emerald-50 text-emerald-900",

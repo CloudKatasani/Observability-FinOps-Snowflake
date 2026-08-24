@@ -91,6 +91,11 @@ export function sumDecimals(values: readonly unknown[]): Decimal {
   return total;
 }
 
+/** Total of already-parsed values. */
+export function addAll(values: readonly Decimal[]): Decimal {
+  return values.reduce(addDecimals, ZERO);
+}
+
 export function compareDecimals(a: Decimal, b: Decimal): number {
   const scale = Math.max(a.scale, b.scale);
   const left = signedUnscaled(rescale(a, scale));
