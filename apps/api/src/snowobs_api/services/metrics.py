@@ -130,9 +130,7 @@ class MetricService:
         view of something that has no per-account meaning.
         """
         registry = default_registry()
-        account_scoped = {
-            source.id for source in registry if not source.is_organization_scoped
-        }
+        account_scoped = {source.id for source in registry if not source.is_organization_scoped}
         with self._engine() as chosen:
             catalog = getattr(chosen.engine, "catalog", None)
             if catalog is None or not hasattr(catalog, "accounts"):

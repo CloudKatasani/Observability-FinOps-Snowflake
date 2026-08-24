@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed the demo dataset: generate a synthetic account, then ingest it (§19, §24).
+"""Seed the demo dataset: generate a synthetic organization, then ingest it (§19, §24).
 
 This is the *only* way demo data enters the platform, and it goes in through the
 same pipeline a customer's own extracts go through — profile → identify → map →
@@ -28,6 +28,11 @@ from pathlib import Path
 
 from snowobs_fixtures.config import GeneratorConfig, Scale
 from snowobs_fixtures.generator import generate, summarise, write_csv
+from snowobs_fixtures.organization import (
+    OrganizationConfig,
+    generate_organization,
+    write_organization_csv,
+)
 from snowobs_ingest.catalog import DuckDBCatalog
 from snowobs_ingest.loader import IngestPipeline
 
@@ -81,6 +86,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Re-seed even if the tenant already holds landed data.",
     )
+    parser.add_argument(
+        "--single-account",
+        action="store_true",
+        help=(
+            "Seed one account instead of the four-account organization. The "
+            "organization-level KPIs then render as unavailable, which is correct "
+            "but makes for a narrower demo."
+        ),
+    )
     return parser
 
 
@@ -119,23 +133,65 @@ def main(argv: list[str] | None = None) -> int:
         end_date=end_date,
     )
 
-    print(
-        f"==> Generating a synthetic account: seed={args.seed} days={args.days} "
-        f"scale={args.scale} window ending {end_date.isoformat()}"
-    )
-    account = generate(config)
-    counts = summarise(account)
-    print(f"    {sum(counts.values()):,} rows across {len(counts)} sources")
-
-    print(f"==> Writing extracts to {extracts}")
-    write_csv(account, extracts)
-
-    print(f"==> Ingesting through the real upload pipeline into {root / tenant}")
     pipeline = IngestPipeline(root, tenant=tenant)
-    summary = pipeline.ingest_directory(extracts)
 
-    landed_rows = summary.total_rows
-    print(f"    landed {len(summary.landed)} file(s), {landed_rows:,} rows")
+    if args.single_account:
+        print(
+            f"==> Generating a synthetic account: seed={args.seed} days={args.days} "
+            f"scale={args.scale} window ending {end_date.isoformat()}"
+        )
+        account = generate(config)
+        counts = summarise(account)
+        print(f"    {sum(counts.values()):,} rows across {len(counts)} sources")
+
+        print(f"==> Writing extracts to {extracts}")
+        write_csv(account, extracts)
+
+        print(f"==> Ingesting through the real upload pipeline into {root / tenant}")
+        summary = pipeline.ingest_directory(extracts)
+        landed_rows = summary.total_rows
+        print(f"    landed {len(summary.landed)} file(s), {landed_rows:,} rows")
+    else:
+        # The organization is the default because the platform is an
+        # organization-wide product: seeding one account leaves the twelve
+        # organization KPIs correctly but unhelpfully unavailable, and hides the
+        # account filter entirely — there is nothing to filter between.
+        organization = OrganizationConfig(
+            seed=args.seed,
+            days=args.days,
+            scale=Scale(args.scale),
+            end_date=end_date,
+        )
+        print(
+            f"==> Generating a synthetic organization: {organization.organization_name} "
+            f"with {len(organization.accounts)} accounts, seed={args.seed} "
+            f"days={args.days} scale={args.scale} window ending {end_date.isoformat()}"
+        )
+        generated = generate_organization(organization)
+        for name, account_data in generated.accounts.items():
+            rows = sum(len(table) for table in account_data.tables.values())
+            print(f"    {name:<18} {rows:>9,} rows")
+        org_rows = sum(len(table) for table in generated.org_tables.values())
+        print(f"    {'ORGANIZATION_USAGE':<18} {org_rows:>9,} rows")
+
+        print(f"==> Writing extracts to {extracts}")
+        layout = write_organization_csv(generated, extracts)
+
+        print(f"==> Ingesting through the real upload pipeline into {root / tenant}")
+        landed_files = landed_rows = 0
+        # Each account is uploaded separately, exactly as an enterprise would:
+        # an ACCOUNT_USAGE extract carries no account column, so the account is
+        # recorded at upload time rather than inferred from the rows.
+        for account_name, directory in sorted(layout.account_dirs.items()):
+            summary = pipeline.ingest_directory(directory, account=account_name)
+            landed_files += len(summary.landed)
+            landed_rows += summary.total_rows
+        summary = pipeline.ingest_directory(
+            layout.organization_dir, account=generated.organization_name
+        )
+        landed_files += len(summary.landed)
+        landed_rows += summary.total_rows
+        print(f"    landed {landed_files} file(s), {landed_rows:,} rows")
     for result in summary.pending_confirmation:
         print(f"    ! needs confirmation: {result.file_name} — {result.mapping.reason}")
     for result in summary.unrecognised:
