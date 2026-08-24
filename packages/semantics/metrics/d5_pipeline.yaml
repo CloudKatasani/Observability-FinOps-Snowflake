@@ -106,7 +106,7 @@
   format: {type: integer, decimals: 0}
   grain: day
   dimensions: [database, task_schema, graph_root]
-  synonyms: [chronic failures, flaky tasks, repeatedly failing tasks]
+  synonyms: [chronic failures, flaky tasks, repeatedly failing tasks, keep failing, fail again and again]
   description: >
     Number of distinct tasks that have failed more than once over the retained
     history. A single failure is an event; a second one is a defect, and this is

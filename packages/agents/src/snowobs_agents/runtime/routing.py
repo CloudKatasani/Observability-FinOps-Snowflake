@@ -214,6 +214,40 @@ def _token_weights(model: SemanticModel) -> dict[str, float]:
     }
 
 
+#: What a user calls each domain, against the abbreviation its metric ids use.
+#: `wh.query_count` and `q.queue_share` are the warehouse and query domains and
+#: neither id contains the word, so "how many queries ran per warehouse" could
+#: not tell `wh.query_count` from `cost.by_warehouse_credits`.
+#:
+#: Applied as a small separate bonus rather than folded into the metric's
+#: identity words: an identity word feeds the inverse-frequency weighting, and
+#: adding "query" to all fourteen query metrics drove its weight to almost
+#: nothing — which made "how many queries ran?" match no metric at all.
+_DOMAIN_WORDS: dict[str, tuple[str, ...]] = {
+    "cost": ("cost", "spend", "billing"),
+    "warehouse": ("warehouse", "compute"),
+    "query": ("query", "queries", "statement"),
+    "storage": ("storage",),
+    "pipeline": ("pipeline", "task", "ingestion"),
+    "quality": ("quality",),
+    "security": ("security", "access"),
+    "ai": ("cortex",),
+    "chargeback": ("chargeback", "allocation"),
+}
+_DOMAIN_BONUS = 0.9
+
+
+def _domain_bonus(metric: Metric, tokens: list[str]) -> float:
+    """Credit a metric when the question names the subject area it belongs to.
+
+    Matched against stemmed tokens rather than the raw question: users write
+    "which tasks fail", and a word-boundary search for "task" does not find
+    "tasks".
+    """
+    words = {_stem(word) for word in _DOMAIN_WORDS.get(metric.domain, ())}
+    return _DOMAIN_BONUS if any(_stem(token) in words for token in tokens) else 0.0
+
+
 def _score(
     metric: Metric,
     question: str,
@@ -297,7 +331,7 @@ def _score(
     if not asked_for_a_breakdown and _is_a_breakdown(metric):
         score -= 0.5
 
-    return score
+    return score + _domain_bonus(metric, tokens)
 
 
 #: Id fragments that mark a metric as a slice of a larger figure rather than
