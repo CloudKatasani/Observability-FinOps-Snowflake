@@ -29,8 +29,11 @@ git clone <repo> && cd <repo>
 make demo                        # http://localhost:8080
 ```
 
-That generates a synthetic Snowflake account, ingests it through the real
-OFFLINE path, and serves the app from a single container. With no LLM key the
+That generates a synthetic Snowflake organization — four accounts under
+`ACME_GROUP`, each uploaded separately the way a real enterprise's extracts
+arrive — ingests it through the real OFFLINE path, and serves the app from a
+single container. A scope selector beside the time range reads every KPI at
+organization level or for one account. With no LLM key the
 agent still answers: questions route to governed metrics deterministically, and
 it says plainly that it will not narrate the result. `make doctor` checks ports
 and Docker resources first; `make demo-down` removes the stack and its volumes.
@@ -78,7 +81,7 @@ make build         # build container images
 - `docs/SECURITY.md` — threat model, the Snowflake privilege design, the SQL guard.
 - `docs/RUNBOOK.md` — deploy, rollback, and a procedure for every alert.
 - `docs/USER_GUIDE.md` — for the FinOps analyst who will use this daily.
-- `docs/DEMO.md` — the guided walkthrough of the synthetic account.
+- `docs/DEMO.md` — the guided walkthrough of the synthetic organization.
 - `docs/KPI_CATALOG.md` — every KPI, its sources, and its freshness floor (generated).
 - `docs/DATA_CONTRACTS.md` — the published data products and their contracts (generated).
 - `docs/ASSUMPTIONS.md` — verified Snowflake/DuckDB/LLM facts with revisit triggers.

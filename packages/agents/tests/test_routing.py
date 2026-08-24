@@ -12,10 +12,12 @@ from datetime import date
 import pytest
 
 from snowobs_agents.runtime.routing import (
+    account_named,
     comparison_windows,
     is_causal,
     route,
 )
+from snowobs_agents.runtime.supervisor import AgentRuntime
 from snowobs_semantics.model import SemanticModel, default_model
 
 TODAY = date(2026, 8, 24)
@@ -49,6 +51,10 @@ def model() -> SemanticModel:
         # Nothing here narrows the subject beyond "spend", so a Cortex model
         # breakdown is the wrong shape of answer as well as the wrong subject.
         ("Why did spend change week over week?", "cost.spend_usd"),
+        # An enterprise question. "Which account" asks for a breakdown by
+        # account; answering with the fleet's total would name no account at
+        # all, which is not an answer to the question asked.
+        ("Which account spends the most?", "org.account_spend"),
     ],
 )
 def test_ordinary_questions_reach_the_metric_that_answers_them(
@@ -190,3 +196,37 @@ def test_a_breakdown_does_not_answer_a_question_that_asked_for_no_breakdown(
     assert sliced is not None
     assert sliced.metric_id == "cost.by_team_credits"
     assert sliced.dimensions == ["team"]
+
+
+# ────────────────────────────────────────────────────────── account questions
+def test_which_account_asks_for_a_breakdown_by_account(model: SemanticModel) -> None:
+    routed = route("Which account spends the most?", model)
+    assert routed is not None
+    assert routed.dimensions == ["account"]
+
+
+def test_a_question_naming_no_account_stays_organization_wide(model: SemanticModel) -> None:
+    """A per-account slice is not the same as scoping to one account: the first
+    names every account, the second silently drops the rest.
+    """
+    routed = route("Which account spends the most?", model)
+    assert routed is not None
+    assert account_named("Which account spends the most?", ("ACME_PROD", "ACME_SANDBOX")) is None
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which accounts do we have data for?",
+        "How many accounts are in the organization?",
+        "list the accounts",
+    ],
+)
+def test_a_question_about_the_fleet_reaches_the_fleet_tool_not_a_metric(question: str) -> None:
+    """These asked for a list and used to get a figure — whichever organization
+    metric matched the word "accounts". A real number, for a question that did
+    not ask for one.
+    """
+    call = AgentRuntime._deterministic_intent(question)
+    assert call is not None
+    assert call.name == "list_accounts"

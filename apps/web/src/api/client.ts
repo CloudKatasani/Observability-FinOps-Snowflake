@@ -349,7 +349,7 @@ export const problemDetailSchema = z.object({
 });
 export type ProblemDetail = z.infer<typeof problemDetailSchema>;
 
-/** A metric that cannot be answered at the requested scope, per `services/scope.py`. */
+/** A metric that cannot be answered at the requested scope, per `packages/semantics/.../scope.py`. */
 export const SCOPE_UNAVAILABLE_PROBLEM =
   "https://snowobs.dev/problems/scope-unavailable";
 

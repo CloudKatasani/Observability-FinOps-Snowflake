@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    landed {len(summary.landed)} file(s), {landed_rows:,} rows")
     else:
         # The organization is the default because the platform is an
-        # organization-wide product: seeding one account leaves the twelve
+        # organization-wide product: seeding one account leaves the sixteen
         # organization KPIs correctly but unhelpfully unavailable, and hides the
         # account filter entirely — there is nothing to filter between.
         organization = OrganizationConfig(

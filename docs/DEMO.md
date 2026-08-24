@@ -11,15 +11,29 @@ phenomenon does not appear on a dashboard, that is said rather than glossed.
 
 ## What this is
 
-`make demo` generates a synthetic Snowflake account, ingests it **through the same
-upload pipeline a customer's own extracts go through**, and serves the API and the
-SPA from a single container on `http://localhost:8080`. Nothing is written straight
-into the lake, so what the demo shows is what the real ingestion path produces.
+`make demo` generates a synthetic Snowflake **organization**, ingests it **through
+the same upload pipeline a customer's own extracts go through**, and serves the
+API and the SPA from a single container on `http://localhost:8080`. Nothing is
+written straight into the lake, so what the demo shows is what the real
+ingestion path produces.
 
-The account is 120 days of history, 12 warehouses, 8 teams, at the `small` scale
-(1,500 queries per day) — the defaults in `scripts/demo_seed.py` and
-`fixtures/generator/src/snowobs_fixtures/config.py`. The window ends **today**, so
-the dashboards' "Last 30 days" default lands inside the data.
+The organization is `ACME_GROUP` with four accounts, each uploaded separately —
+the way a real enterprise's extracts arrive — plus one `ORGANIZATION_USAGE`
+export covering the whole group:
+
+| Account | Region / cloud | Edition | Character |
+|---|---|---|---|
+| `ACME_PROD` | `AWS_EU_WEST_1` | Enterprise | The primary. Largest spend, 82% of it tagged |
+| `ACME_ANALYTICS` | `AWS_US_EAST_1` | Enterprise | BI-heavy, and growing ~1.3%/day — the runaway |
+| `ACME_SANDBOX` | `GCP_US_CENTRAL1` | Standard | Small, ad-hoc, and almost untagged (35%) |
+| `ACME_APAC` | `AZURE_AUSTRALIAEAST` | Business Critical | Replicates back to the EU primary; heavy egress |
+
+Each account is 120 days of history at the `small` scale — the defaults in
+`scripts/demo_seed.py` and `fixtures/generator/src/snowobs_fixtures/organization.py`.
+The window ends **today**, so the dashboards' "Last 30 days" default lands inside
+the data. `scripts/demo_seed.py --single-account` seeds one account instead; the
+organization KPIs then render as unavailable, which is correct but far less
+interesting.
 
 Fourteen phenomena are planted deliberately, declared in
 `fixtures/generator/src/snowobs_fixtures/ground_truth.py`. That file is the
@@ -66,6 +80,11 @@ required). Logs: `docker compose -f docker-compose.demo.yml logs -f app`.
 Six pages, in this order. The global time-range picker in the header applies to
 every page and is mirrored into the URL, so any view here can be shared as a link.
 
+Beside it is the **scope** selector: *Organization* (the default) or one of the
+four accounts. Leave it on Organization for the walkthrough and use it
+deliberately at step 1a — switching it mid-tour makes the numbers move for a
+reason nobody in the room has been told yet.
+
 ### 1 · Executive (`/`) — two minutes
 
 Open with the six tiles: **Total credits**, **Billed credits**, **Spend**,
@@ -96,6 +115,34 @@ warehouse**, and **top offender fingerprints** — where the planted query regre
 may be, and the exact SQL behind it. Nothing here is a number you have to take on
 trust.
 
+### 1a · The scope selector — one minute
+
+Still on the Executive page, open the **scope** selector. Beside each account is
+a count of how many of the ~90 KPIs can be answered there — the selector is
+honest rather than decorative.
+
+Pick **ACME_SANDBOX**. Watch two things (figures below are the shipped fixture
+over the last 30 days; yours will differ slightly because the window ends today):
+
+- **Spend collapses.** The sandbox is about 1,835 credits against the
+  organization's 59,198 — roughly 3% of the group.
+- **Unattributed spend jumps from 21% to 66%.** Nobody tags anything in the
+  sandbox, and the organization-wide fifth was averaging over an account where
+  two thirds of the cost has no owner at all. `ACME_PROD` at the same moment
+  reads 20%. That is the argument for the selector in one screen.
+
+Now look at the four commitment tiles — *Contracted amount*, *Commitment
+consumed*, *Commitment remaining*, *Commitment runway*. At account scope they do
+not blank and they do not read zero: they say *"describes the whole
+organization — it comes from `contract_items`, which has no per-account
+breakdown"* and point back to organization scope. R3, at the scope level.
+
+The selector's own counts say the same thing before you click: **108 of 108**
+KPIs answerable at organization scope, **104 of 108** at any account — the four
+that differ are exactly those commitment tiles.
+
+Return the selector to **Organization** before continuing.
+
 ### 2 · Platform health (`/health`) — one and a half minutes
 
 Tiles: **Query failure rate**, **Query volume**, **Queue overload share**.
@@ -119,7 +166,7 @@ The **reconciliation gate banner** is at the top, before any figure. On the ship
 fixture it passes, and reads in this form — your credit figures will differ,
 because the generated window ends today:
 
-> Reconciled: allocated 19002.52 credits vs metered 19002.52 (+0.000%), within ±0.5%.
+> Reconciled: allocated 178826.77 credits vs metered 178825.29 (+0.001%), within ±0.5%.
 
 Say why that banner exists: allocated cost reconciles to the metered bill or the
 chargeback figures **do not publish** (R6). When the gate fails, the team table is
@@ -141,22 +188,43 @@ Two things to point out:
 - Expand the SQL disclosure: the allocation is four compiled statements and **all
   four are shown**, each labelled with what it contributes.
 
+Then switch the **scope** selector to `ACME_SANDBOX` and watch the banner
+re-run. The allocation, the cloud-services apportionment and the metered total
+the gate checks against are all scoped together — the sandbox reconciles against
+the sandbox's bill, not the group's, which would report a variance of most of
+the fleet and block a figure that is correct. Unattributed cost jumps from 24%
+to 77%, which is the same finding as step 1a arriving on the page where somebody
+has to pay for it.
+
+Pick an account with no data at all and the page refuses by name rather than
+allocating zero: an empty allocation reconciles perfectly against an empty bill,
+and a green gate over a chargeback of nothing is the worst possible answer.
+
 **Conclusion:** this is the difference between a chargeback report and a chargeback
-argument. Every line reconciles to the bill, and the arithmetic is inspectable.
+argument. Every line reconciles to the bill, at whichever level you asked for it,
+and the arithmetic is inspectable.
 
 ### 4 · Coverage & sources (`/coverage`) — one and a half minutes
 
 The R3 page. Sources grouped by domain, each with status, row count, window,
 freshness against its documented latency, and copy-pastable remediation.
 
-On the demo the generator lands **16 of the 55 registered sources**, and **96 of
-the 108 KPIs are enabled** — the fixture covers every account-scoped domain. The
-12 that are not are the organization ones (D10) that need a fleet-wide export from
-the organization account: they render as "Unavailable — requires
-`ORGANIZATION_USAGE.…`" with the remediation beside them, which is R3 working
-rather than a gap. The 39 sources shown as missing carry an upload instruction
+On the demo the generator lands **22 of the 55 registered sources** — fifteen
+account-scoped plus seven from `ORGANIZATION_USAGE` — and **all 108 KPIs are
+enabled**, including the organization domain (D10), because the seed includes the
+fleet-wide export. The 33 sources shown as missing carry an upload instruction
 each; in LIVE mode the same column carries the exact `GRANT DATABASE ROLE …`
 statement instead.
+
+Each account-scoped source also breaks down **per account**, so "query history is
+available" becomes "available for these four accounts" — the row that answers the
+enterprise question of *which* account is missing an extract. Organization-scoped
+sources have no such breakdown and do not pretend to: one export covers the whole
+group.
+
+Seeding with `--single-account` instead leaves the sixteen D10 KPIs unavailable
+with their `ORGANIZATION_USAGE` remediation beside them, which is the same R3
+behaviour seen from the other side.
 
 To show the unavailable path properly, take a source away — see
 [Showing R3 for real](#showing-r3-for-real) below.
@@ -178,11 +246,20 @@ named:
 | "Which warehouses are queueing?" | `wh.queue_overload_pct` | sre |
 | "How many dormant users are there?" | `sec.dormant_users` | governance |
 | "Which source views are loaded?" | coverage (no metric) | onboarding |
+| "Which account spends the most?" | `org.account_spend`, sliced by account | org |
+| "What did ACME_SANDBOX spend?" | `cost.spend_usd`, scoped to that account | finops |
+| "Which accounts do we have data for?" | the fleet (no metric) | org |
 
 Watch the **streamed trace**: tool calls appear as they happen, then the answer,
 then the metrics used, the sources used, and the SQL behind each figure. Same
 statement, same governed metric, same number as the dashboard — because the agent
 picks metrics, never writes SQL.
+
+The last three are the enterprise questions. Note the difference between the
+second and the first: naming an account scopes the figure to it, while *"which
+account"* asks for a breakdown across all of them. Naming two accounts —
+"compare ACME_PROD and ACME_SANDBOX" — stays organization-wide on purpose,
+because a comparison is not a request to answer for either one.
 
 Then ask something out of scope: *"What is the weather in Dublin?"* The console
 declines and says why:

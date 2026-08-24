@@ -105,6 +105,10 @@ _DIMENSION_HINTS: dict[str, tuple[str, ...]] = {
     "fingerprint": ("by fingerprint", "by query", "which query", "which queries"),
     "database": ("by database", "per database"),
     "error_class": ("by error", "error class", "error code"),
+    # "which account spends the most" is a breakdown *by* account, not a total
+    # for the organization — without this it answered with the fleet's sum and
+    # named no account at all.
+    "account": ("by account", "per account", "each account", "which account", "account breakdown"),
 }
 
 _PERIOD_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (

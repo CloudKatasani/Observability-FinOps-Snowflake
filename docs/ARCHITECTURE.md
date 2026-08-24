@@ -210,18 +210,82 @@ Parity is enforced three ways, all in CI:
 | Golden SQL snapshots | Neither rendering changed unintentionally (184 files) | `packages/engines/tests/test_golden_sql.py` |
 | Documented tolerances | The only permitted differences are declared and justified | `PARITY_EXCEPTIONS` in `packages/engines/src/snowobs_engines/parity.py`, documented in [`PARITY_EXCEPTIONS.md`](PARITY_EXCEPTIONS.md) |
 
-### Where the mode is decided today
+### Where the mode is decided
 
 `SNOWOBS_MODE` (`live` / `offline` / `auto`) is validated at startup and reported
-by `GET /api/v1/meta`; `DatasetService.coverage()` uses it to choose between grant
-remediation and upload remediation. The metric read path
-(`MetricService._engine`) constructs the DuckDB engine unconditionally: the
-Snowflake pushdown engine is implemented and the connection surface
-(`POST /api/v1/connections/probe`, the provisioning endpoints) is live, but the
-metric API does not yet select `SnowflakeEngine` from configuration. A LIVE
-deployment therefore serves metrics from whatever has been landed for the tenant.
-This is the single largest gap between the design and the build; it is listed
-again in §11.
+by `GET /api/v1/meta`. Every read path resolves it through one function —
+`apps/api/src/snowobs_api/services/engines.py::open_engine` — which returns the
+engine, its dialect, and the mode that was actually used. No service constructs
+an engine itself, and `apps/api/tests/test_engine_selection.py::test_no_service_hardcodes_an_engine_or_a_dialect`
+fails the build if one starts to.
+
+The three modes differ in what they will fall back to. `live` connects, and a
+broken connection raises rather than quietly serving landed extracts under a
+LIVE label. `offline` reads the lake. `auto` prefers the connection and falls
+back, recording `fell_back_because` on the choice so the reason reaches the
+response rather than being inferred from the numbers.
+
+---
+
+## 5a. Organization and account scope
+
+An enterprise runs many Snowflake accounts under one organization, and the same
+question means different things at the two levels. The scope is therefore part
+of a request, not a deployment setting: `scope=organization` (the default) or
+`scope=account&account=NAME` on the metric, tile, and chargeback endpoints, and
+an `account` argument on the agents' `query_metric` tool.
+
+The two levels are not interchangeable, because the two source families are not:
+
+| | `ORGANIZATION_USAGE` | `ACCOUNT_USAGE` |
+|---|---|---|
+| Covers | Every account in the organization | One account per connection |
+| Carries | Billing, metered credits, storage, transfer, contracts, rate sheets | Queries, warehouses, users, grants, tasks, tables |
+| Missing | Queries, users, tables — no operational detail at all | Any account not connected or uploaded |
+
+So a metric can be unanswerable at a scope for two quite different reasons, and
+both are reported as such rather than answered at the other scope (**R3**):
+
+- A metric on an organization-only source has no per-account breakdown. A
+  contract's value belongs to the organization; scoping it to one account would
+  return the organization's figure under an account's label.
+- An `ACCOUNT_USAGE` metric has no single-query organization total in LIVE — it
+  would need one query per account and a merge, and averaging a rate or a
+  percentile across accounts is wrong.
+
+`packages/semantics/src/snowobs_semantics/scope.py::assess` is the one place
+that verdict is reached. It lives in the semantic package rather than the API
+because "can this metric answer at this scope?" is a property of the metric and
+its sources, not of the transport asking: the dashboards, the chargeback engine
+and the agents all call it, so an agent cannot scope a metric the UI refuses to
+scope.
+
+### Partial roll-ups
+
+OFFLINE, an organization figure is computed over every account in the lake —
+which is the organization's figure only if every account has been uploaded.
+`MetricService.organization_roster()` reads the account roster from billing,
+which names every account whether or not its own detail ever arrived, and the
+difference against what landed is reported as `missing_accounts` on the
+response. `scope_partial` therefore means "the platform can name an account
+this figure is missing", not "a roll-up happened" — a warning that was always
+on is one nobody reads.
+
+The organization is not one of its own accounts. `ORGANIZATION_USAGE` is
+exported once, from whichever account holds the grant, so those rows carry an
+account stamp too; `catalog.accounts()` skips organization-scoped sources so
+that the scope picker and the coverage matrix share one definition of the fleet.
+
+### Chargeback at account scope
+
+The allocation, the cloud-services apportionment, and the metering total the
+reconciliation gate checks against are scoped together. Reconciling one
+account's allocated credits against the organization's bill would report a
+variance of most of the fleet and block publication for a figure that is
+correct — R6 firing on a scope mismatch rather than on an allocation error. An
+account with no landed inputs is refused rather than allocated: an empty
+waterfall reconciles perfectly against an empty bill, and the gate would go
+green over a chargeback of nothing.
 
 ---
 
@@ -430,14 +494,13 @@ A-16, A-18, A-19); the rest are recorded in this table and in
 
 | Gap | Consequence |
 |---|---|
-| `MetricService` always constructs `DuckDBEngine`; `SnowflakeEngine` is not selected from configuration | A LIVE deployment's dashboards read landed data, not pushdown. The connection, probe, and provisioning surfaces are fully wired |
 | No object-storage adapter | The OFFLINE lake is local disk. The S3 bucket exists in Terraform, encrypted and lifecycled, unused on the read path |
 | No OIDC authentication or RBAC middleware | `AUTH__PROVIDER` is validated but no `/auth/*` endpoints exist. Role gating is enforced inside the agent tool registry (`specs_for`), not at the HTTP boundary. The approving human is identified by the `X-Snowobs-Actor` header (A-19), so the API must sit behind an authenticated perimeter |
 | No Postgres schema or Alembic migrations | App metadata has no durable store yet. Data-product approvals live in an in-process append-only ledger (A-18) and agent traces in process memory. Postgres is reachable and checked by `/readyz`, but nothing writes to it |
 | The worker ships `ping` and `evaluate_alert_rules` | Scheduled refresh, reconciliation, close, and forecast jobs are not implemented; those engines exist as libraries and are exercised by the API and the tests. Alert evaluation runs on a cron schedule derived from `ALERTING__EVALUATION_INTERVAL_MINUTES` |
 | Alerting reaches webhook and email only | 18 rules ship in `config/alert_rules.yaml`, the worker evaluates them on a schedule, and `/api/v1/alerts` lists, backtests, and exports them. PagerDuty and ServiceNow/Jira ticket creation are **not** implemented (A-25) — both accept inbound webhooks, so the shipped `WebhookChannel` reaches them, but there is no incident deduplication or ticket lifecycle. Dedup state and per-rule statistics are per-process (A-24), and there is no alerts UI |
-| The vendor LLM SDKs are optional extras (`snowobs-llm[anthropic]`, `[bedrock]`) that neither `Dockerfile.allinone` nor `uv sync --all-packages` installs | The published image can run only `cortex` or `none`. Selecting `anthropic` or `bedrock` raises a readable `LLMError` naming the missing package rather than failing obscurely |
-| `AgentService` calls `build_provider(self.settings.llm)` without an `api_key`, and `LLM__API_KEY` — which the ECS task definition injects from Secrets Manager — is not a field on `LLMSettings` | With `llm_provider = "anthropic"` the injected secret is read by nothing in this tree; `AnthropicProvider` constructs the client with no key and relies on the SDK's own environment lookup. Verify the key reaches the client before depending on an Anthropic deployment |
+| The vendor LLM SDKs are optional extras (`snowobs-llm[anthropic]`, `[bedrock]`). `Dockerfile.allinone` installs them with `--all-extras`; the per-service `deploy/docker/Dockerfile.api` and `Dockerfile.worker` do not | A per-service deployment can run only `cortex` or `none` unless the extras are added. Selecting `anthropic` or `bedrock` without them raises a readable `LLMError` naming the missing package rather than failing obscurely |
+| LIVE mode answers one account per connection, so an `ACCOUNT_USAGE` metric has no organization-wide figure there | The scope selector declines it with the reason (§5a) rather than querying each configured account and merging. An organization roll-up of operational detail is an OFFLINE capability today |
 | No `/metrics` Prometheus endpoint, no OpenTelemetry wiring | Logs are structured and trace-correlated; application metrics reach CloudWatch only through the ALB/ECS/RDS dimensions the Terraform alarms read |
 
 ---

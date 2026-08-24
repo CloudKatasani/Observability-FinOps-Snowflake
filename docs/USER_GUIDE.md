@@ -27,6 +27,9 @@ and [`DATA_CONTRACTS.md`](DATA_CONTRACTS.md) describes the published data produc
 5. **The agent quotes; it does not calculate.** Every number in an agent answer
    came from the same governed metric a dashboard would use, and the answer shows
    you the SQL. If it cannot ground a figure, it declines rather than guessing.
+6. **Every figure names its scope.** If your enterprise runs several Snowflake
+   accounts, each number is either one account's or the whole organization's,
+   and the page tells you which. See §2a.
 
 ---
 
@@ -47,6 +50,61 @@ into a message and will open the same way for a colleague.
 
 Presets: last 7 days, last 30 days (the default), last 90 days, month to date, last
 13 months, or a custom range.
+
+---
+
+## 2a. Organization or one account
+
+Beside the time-range picker is a **scope** selector. It has one entry for the
+whole organization and one for each Snowflake account the platform has data
+for. Like the time range, the choice applies to every page.
+
+The two levels answer genuinely different questions, and the selector is honest
+about which questions each can answer:
+
+- **Organization** — every account together. Billing, credits, storage, and
+  contracts come from `ORGANIZATION_USAGE`, which covers every account whether
+  or not that account has been onboarded. Operational detail — queries, users,
+  warehouses, grants — is rolled up over the accounts that *have* been onboarded.
+- **An account** — that account alone. This is where query-level detail lives:
+  slow queries, spilling warehouses, grant drift, failing tasks.
+
+Next to each entry is a count: *how many of the catalogue's KPIs can be answered
+at this scope*. An account that has only had its billing uploaded will visibly
+narrow the catalogue rather than filling the page with blanks.
+
+**When a KPI cannot answer at the scope you chose, it says why.** Two reasons
+come up:
+
+- *"… describes the whole organization"* — a contract or a commitment balance
+  has no per-account value. There is nothing to filter; switch to organization
+  scope to read it.
+- *"… cannot be narrowed to one account"* — the source does not record which
+  account its rows came from. This is a coverage gap, and the coverage page
+  names the extract that would fix it.
+
+### "Missing from this roll-up"
+
+An organization figure computed over uploaded detail is the whole
+organization's only if every account has been uploaded. The platform knows the
+full account list from billing, so when an account is in the bill but has landed
+no detail, an organization-wide figure carries a note naming that account.
+
+Take it seriously: it means the number in front of you is an **under-count**, by
+whatever that account consumes. It is not a warning that appears on every
+roll-up — if you never see it, every account the organization has is included.
+
+### Chargeback and scope
+
+Chargeback follows the selector like everything else. At account scope the
+waterfall allocates within that account and the reconciliation gate checks it
+against *that account's* metered bill — not the organization's, which would
+report a variance of most of the fleet and block a correct figure.
+
+An account with no chargeback inputs is refused, with the accounts that do have
+data named. It is not allocated as zero: an empty allocation reconciles
+perfectly against an empty bill, and a green gate over a chargeback of nothing
+is worse than an error message.
 
 ---
 
@@ -272,6 +330,8 @@ called, which metrics they used, then the answer, then the SQL behind each figur
 | An operational check | "Which warehouses are queueing?" |
 | A governance check | "How many dormant users are there?" |
 | A capability check | "Which source views are loaded?" |
+| One account | "What did ACME_PROD spend?" |
+| The fleet | "Which accounts do we have data for?" |
 
 **How to verify anything it tells you**
 
@@ -293,13 +353,28 @@ called, which metrics they used, then the answer, then the SQL behind each figur
   names are treated as data, never as instruction.
 - It will not speculate about individuals' performance from query or login history.
   That is a refusal rule, not an oversight.
+- It will not answer for an account that has no data, or scope a figure that has
+  no per-account meaning. Naming an account it does not have gets you the list of
+  the ones it does; asking for one account's share of an organization-level
+  contract gets you an explanation, not a number.
+- It will not add accounts together to build an organization total. It asks for
+  the organization figure, which reconciles against billing and knows which
+  accounts it is missing.
 - It will not change anything in Snowflake. Publishing a data product requires a
   named human approval, recorded with a reason.
+
+**Scoping a question.** Name an account in the question — "what did ACME_PROD
+spend?" — and the answer covers that account alone. Name none and the answer is
+organization-wide, and says so. Name two ("compare ACME_PROD and ACME_SANDBOX")
+and it stays organization-wide rather than picking one of them, because a
+comparison is not a request to answer for either. Ask "which accounts do we have
+data for?" to see the fleet and any account whose detail has not been uploaded.
 
 **If the deployment has no LLM configured** the console still answers: it matches
 your question to a governed metric, runs it, and reports the result with its
 provenance — and says plainly that narrative generation is disabled. The numbers
-are identical; only the prose is missing.
+are identical; only the prose is missing. Account scoping works here too: the
+deterministic path scopes to an account your question names.
 
 ---
 
@@ -307,7 +382,7 @@ are identical; only the prose is missing.
 
 | Day | Do this | You will learn |
 |---|---|---|
-| 1 | Coverage & sources, top to bottom | What this platform can and cannot answer for your account yet |
+| 1 | Coverage & sources, top to bottom; then switch the scope selector through each account | What this platform can and cannot answer, for the organization and for each account |
 | 2 | Executive over the last 90 days; open the SQL under three tiles | Where the money is, and how the figures are built |
 | 3 | Chargeback for last month; read the banner, then the component mix | Whether your allocation reconciles, and how much cost is unowned |
 | 4 | Platform health; list the warehouses that are low-utilisation and never queue | Your first right-sizing candidates, with evidence |

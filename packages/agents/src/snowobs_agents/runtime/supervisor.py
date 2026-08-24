@@ -68,6 +68,24 @@ _COVERAGE_PHRASES = (
     "what can you answer",
     "data do i have",
 )
+#: Questions about the fleet itself rather than about a figure. Without these
+#: "which accounts do we have?" scored as a metric question and answered with
+#: whichever organization metric matched the word "accounts" — a real number,
+#: for a question that did not ask for one.
+_FLEET_PHRASES = (
+    "which accounts",
+    "what accounts",
+    "how many accounts",
+    "list the accounts",
+    "list accounts",
+    "our accounts",
+    "the accounts we",
+    "accounts do we",
+    "accounts do i",
+    "accounts are in",
+    "accounts in the organization",
+    "accounts in the org",
+)
 _CATALOGUE_PHRASES = (
     "what metrics",
     "which metrics",
@@ -457,6 +475,9 @@ class AgentRuntime:
 
         if any(phrase in lowered for phrase in _CATALOGUE_PHRASES):
             return ToolCall(id="deterministic-catalogue", name="list_metrics", arguments={})
+
+        if any(phrase in lowered for phrase in _FLEET_PHRASES):
+            return ToolCall(id="deterministic-accounts", name="list_accounts", arguments={})
 
         # "tell me about cost.idle_credits" — an exact metric id is unambiguous.
         for token in re.findall(r"[a-z][a-z_]*\.[a-z][a-z_]*", lowered):

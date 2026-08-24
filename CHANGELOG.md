@@ -406,6 +406,63 @@ All notable changes to this project are documented here. The format follows
   count and the worker alarm's description of what it protects. The first is
   now asserted by a test.
 
+### Added — Phase 9b (Reading the catalogue at organization or account scope)
+
+- **A scope filter beside the time range.** `GET /api/v1/metrics/scopes` lists
+  the organization and every account with landed data, each with a count of how
+  many of the 108 KPIs it can answer — a sandbox that has only had its billing
+  uploaded visibly narrows the catalogue rather than returning blanks. The
+  choice is global, in the URL, and part of every query key, so switching
+  accounts cannot leave the previous account's figure on screen under the new
+  account's name.
+- **One scope verdict, four callers.** `snowobs_semantics.scope.assess` decides
+  whether a metric can answer at a scope and why not when it cannot; the tiles,
+  the metric query endpoint, chargeback, and the agents all call it. A metric
+  the UI refuses to scope therefore cannot be scoped by asking an agent
+  instead. Two refusals are distinguished: a metric that *describes the
+  organization* (a contract has no per-account value) and one that *cannot be
+  narrowed* (its source records no account) — each stated with its remedy (R3).
+- **Scoped chargeback.** `/api/v1/chargeback/allocation` takes `scope` and
+  `account`. The allocation, the cloud-services apportionment, and the metered
+  total the reconciliation gate checks against are scoped together — checking
+  one account's allocation against the organization's bill would report a
+  variance of most of the fleet and block a figure that is correct. An account
+  with no landed inputs is refused by name: an empty waterfall reconciles
+  perfectly against an empty bill, and R6 must not go green over a chargeback
+  of nothing.
+- **Agents can be asked about one account.** `query_metric` takes an `account`;
+  a new `list_accounts` tool reports the fleet and any account whose detail has
+  not landed; every tool result carries the scope, the contributing accounts,
+  and the missing ones. With no LLM configured the deterministic path scopes to
+  an account the question names — one account, never two, because "compare PROD
+  and SANDBOX" is not a request to answer for either.
+- **`make demo` seeds the whole organization** — four accounts uploaded
+  separately, as an enterprise's extracts actually arrive, plus the
+  organization-wide export. All 108 KPIs populate, 104 of them at account scope.
+
+### Fixed — Phase 9b
+
+- **"Partial roll-up" meant "a roll-up happened".** Every organization figure
+  carried the warning, so the warning meant nothing. It now means the platform
+  can *name* an account that is missing: the account roster comes from billing,
+  which knows every account whether or not its detail was ever uploaded, and
+  the difference against what landed is reported as `missing_accounts`.
+- **The scope endpoint took 208 seconds.** It re-opened the engine and
+  re-registered the catalog once per metric per scope — around 540 lake scans.
+  Memoised for the life of the request: 0.88s cold, 0.40s warm.
+- **Coverage counted the organization as one of its own accounts.** An
+  `ORGANIZATION_USAGE` extract is stamped like any other, so `ACME_GROUP`
+  appeared in the coverage matrix beside its four members while the scope
+  picker excluded it, and the UI had to work around the disagreement.
+  `catalog.accounts()` now skips organization-scoped sources, so both read one
+  definition of the fleet; an account's coverage matrix omits organization
+  sources rather than reporting every account as missing one none of them owns.
+- **"Which accounts do we have?" was answered with a number.** It matched an
+  organization metric on the word "accounts" and returned a figure for a
+  question that asked for a list. Fleet questions now reach `list_accounts`,
+  and "which account spends the most?" slices by account instead of returning
+  the fleet's total under a question that named no account.
+
 ### Deferred (recorded, not stubbed)
 
 - Everything deferred in earlier phases has landed. The remaining limitations
@@ -418,3 +475,10 @@ All notable changes to this project are documented here. The format follows
   management (resource monitors, statement timeouts, auto-suspend policy,
   budgets) — both recorded as A-25. Alert dedup state and per-rule statistics
   are per-process, and no endpoint records that a human acted on a firing (A-24).
+- **An `ACCOUNT_USAGE` metric has no organization-wide figure in LIVE mode**
+  (A-35). `ORGANIZATION_USAGE` metrics answer organization-wide in both modes,
+  and OFFLINE rolls up every landed account; LIVE would need one query per
+  account and a merge, and averaging a rate or a percentile across accounts is
+  wrong. The scope selector declines with that reason and names the two routes
+  that do work, rather than shipping a merge that is right for additive
+  measures and quietly wrong for the rest.

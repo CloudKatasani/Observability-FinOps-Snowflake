@@ -27,6 +27,7 @@ are), [`SECURITY.md`](SECURITY.md) (controls and limitations),
   - [The metadata database is struggling](#the-metadata-database-is-struggling)
 - [Application conditions](#application-conditions)
   - [The reconciliation gate is red](#the-reconciliation-gate-is-red)
+  - [An organization figure is missing an account](#an-organization-figure-is-missing-an-account)
   - [A source has gone stale](#a-source-has-gone-stale)
   - [Parity fails in CI](#parity-fails-in-ci)
   - [Agent evals fail in CI](#agent-evals-fail-in-ci)
@@ -498,6 +499,47 @@ belongs in the assessment as a finding, not in a chargeback line.
 
 **Verify:** re-request the allocation; the banner reads `Reconciled: …, within
 ±0.5%` and the team table repopulates.
+
+**Multi-account deployments.** The gate runs at whatever scope was asked for.
+Add `?scope=account&account=NAME` to narrow the allocation *and* the metered
+total it is checked against — a red gate on one account while the organization
+is green points at that account's inputs, and is much faster to diagnose than
+the roll-up:
+
+```bash
+curl -s "$APP_URL/api/v1/chargeback/allocation?scope=account&account=ACME_PROD" \
+  | jq '{scope, scope_account, reconciliation: .reconciliation.outcome}'
+```
+
+A `422` naming the account means it has landed no chargeback inputs at all; the
+response lists the accounts that have. That is deliberate — allocating it would
+produce an empty waterfall that reconciles against an empty bill, and the gate
+would go green over a chargeback of nothing.
+
+### An organization figure is missing an account
+
+**Symptom.** An organization-wide figure carries `scope_partial: true` and a
+non-empty `missing_accounts`. The UI shows the same as a note under the figure.
+
+**What it means.** Billing (`ORGANIZATION_USAGE`) names every account the
+organization contains, including accounts that have never uploaded their own
+detail. The named account is in the bill but has landed nothing, so any
+organization roll-up of operational detail is an **under-count** by whatever
+that account consumes.
+
+**Diagnose.**
+
+```bash
+curl -s "$APP_URL/api/v1/metrics/q.volume/tile" | jq '{scope_partial, contributing_accounts, missing_accounts}'
+curl -s "$APP_URL/api/v1/datasets/coverage" | jq '.accounts'
+```
+
+**Act.** Onboard the named account — upload its extracts (OFFLINE) or configure
+its connection and run the grants probe (LIVE). The warning clears by itself
+once that account's data lands; it is not a setting to dismiss. If the account
+is genuinely out of scope for this deployment, that belongs in
+[`ASSUMPTIONS.md`](ASSUMPTIONS.md) so the next reader knows the roll-up excludes
+it on purpose.
 
 ### A source has gone stale
 
