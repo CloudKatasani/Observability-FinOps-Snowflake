@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+/* Figures are always tabular so columns of numbers align (BUILD_PROMPT §16.3). */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  @apply bg-white text-slate-900 antialiased;
+}

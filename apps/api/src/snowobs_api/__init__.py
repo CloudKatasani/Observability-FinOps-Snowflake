@@ -1,0 +1,1 @@
+"""snowobs API service."""

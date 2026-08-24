@@ -1,0 +1,71 @@
+[project]
+name = "snowobs"
+version = "0.1.0"
+description = "Observability & FinOps Platform for Snowflake — workspace root"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["apps/api", "apps/worker", "packages/common"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-pyyaml>=6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["apps/api", "apps/worker", "packages/common"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle / pyflakes
+    "I",                # isort
+    "B",                # bugbear
+    "UP",               # pyupgrade
+    "S",                # bandit
+    "N",                # pep8-naming
+    "C4",               # comprehensions
+    "DTZ",              # naive datetimes
+    "RUF",
+]
+[tool.ruff.lint.isort]
+known-first-party = ["snowobs_common", "snowobs_api", "snowobs_worker"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "S105", "S106"]  # asserts and dummy credentials in tests
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+mypy_path = ["packages/common/src", "apps/api/src", "apps/worker/src"]
+explicit_package_bases = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["snowobs_common.*"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["packages/common/tests", "apps/api/tests", "apps/worker/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["packages/common/src"]
+
+[tool.coverage.report]
+show_missing = true

@@ -1,0 +1,10 @@
+# White-label branding. Edit here — never in code (BUILD_PROMPT §16.3).
+# The display name is descriptive and must not incorporate the Snowflake
+# trademark into the product's own mark.
+display_name: "Observability & FinOps Platform for Snowflake"
+short_name: "snowobs"
+palette:
+  navy: "#12446E"
+  primary: "#0070AD"
+  sky: "#12ABDB"
+  coral: "#E94B89"
