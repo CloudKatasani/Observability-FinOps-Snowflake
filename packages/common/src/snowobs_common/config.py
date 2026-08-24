@@ -54,6 +54,12 @@ class LLMSettings(BaseModel):
     model_strong: str | None = None
     model_fast: str | None = None
     daily_usd_cap: Decimal = Decimal("25")
+    #: A reference the secrets adapter resolves at the moment of use — never the
+    #: key itself (§27.13). The `env` resolver reads it from the environment, so
+    #: `LLM__API_KEY_REF=ANTHROPIC_API_KEY` is the usual local setup; on AWS it
+    #: is a Secrets Manager reference. `bedrock` needs none of this: it
+    #: authenticates with the task role.
+    api_key_ref: str | None = None
 
 
 class SnowflakeSettings(BaseModel):

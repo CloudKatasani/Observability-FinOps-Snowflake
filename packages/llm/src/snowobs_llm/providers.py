@@ -7,6 +7,7 @@ The defaults here are the fallback when configuration says nothing.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator, Sequence
 from decimal import Decimal
 from typing import Any
@@ -433,6 +434,17 @@ def build_provider(
 
     match settings.provider:
         case "anthropic":
+            # The docstring above is a promise, and it has to hold here too:
+            # without a key the SDK constructs happily and fails at request
+            # time, which turns a configuration mistake into a broken answer
+            # rather than a degraded one. An ambient ANTHROPIC_API_KEY still
+            # counts, because that is how the SDK is normally driven locally.
+            if not api_key and not os.environ.get("ANTHROPIC_API_KEY"):
+                logger.warning(
+                    "anthropic_provider_requires_a_key",
+                    detail="no LLM__API_KEY_REF resolved; falling back to deterministic mode",
+                )
+                return DeterministicProvider()
             return AnthropicProvider(model=model, api_key=api_key)
         case "bedrock":
             return BedrockProvider(model=model)

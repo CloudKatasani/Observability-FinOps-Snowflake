@@ -5,12 +5,16 @@ description = "Background job worker (arq) for the Observability & FinOps Platfo
 requires-python = ">=3.12"
 dependencies = [
     "snowobs-common",
+    # The alert evaluation job (§14) runs the same AlertService the API serves,
+    # so a rule means one thing in both processes rather than two.
+    "snowobs-api",
     "arq>=0.26",
     "redis>=5.2",
 ]
 
 [tool.uv.sources]
 snowobs-common = { workspace = true }
+snowobs-api = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from snowobs_api.routers import (
     agents,
+    alerts,
     chargeback,
     connections,
     datasets,
@@ -89,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(connections.router)
     app.include_router(products.router)
     app.include_router(agents.router)
+    app.include_router(alerts.router)
     return app
 
 

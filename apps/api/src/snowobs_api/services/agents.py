@@ -26,10 +26,13 @@ from snowobs_agents.specialists.registry import agent_names, all_agents, build_a
 from snowobs_api.services.engines import EngineChoice, open_engine
 from snowobs_common.config import Settings
 from snowobs_common.errors import ConfigurationError
+from snowobs_common.logging import get_logger
 from snowobs_ingest.coverage import build_coverage_matrix
 from snowobs_llm.providers import build_provider
 from snowobs_semantics.compiler import SemanticCompiler
 from snowobs_semantics.model import SemanticModel, default_model
+
+logger = get_logger(__name__)
 
 
 class AgentService:
@@ -78,8 +81,35 @@ class AgentService:
             # §12.3: the ad-hoc hatch stays shut unless a deployment opens it.
             allow_adhoc_sql=self.settings.guardrails.allow_adhoc_sql,
         )
-        provider = build_provider(self.settings.llm)
+        provider = build_provider(self.settings.llm, api_key=self._llm_api_key())
         return AgentRuntime(provider, context, budget=self._budget)
+
+    def _llm_api_key(self) -> str | None:
+        """Resolve the configured key reference, or None to stay deterministic.
+
+        The key is held by reference and resolved here, at the moment of use, so
+        it never reaches settings, the database, or a log (§27.13). A reference
+        that cannot be resolved is not fatal: the platform falls back to the
+        deterministic path, which answers the question without narrating it,
+        rather than failing the request outright (§19).
+        """
+        reference = self.settings.llm.api_key_ref
+        if not reference:
+            return None
+        from snowobs_common.secrets import SecretNotFoundError, build_resolver
+
+        try:
+            return build_resolver(self.settings).resolve(reference)
+        except SecretNotFoundError as exc:
+            # The reference is logged; the value never is, and there is nothing
+            # secret in a name the operator chose themselves.
+            logger.warning(
+                "llm_api_key_unresolved",
+                reference=reference,
+                provider=self.settings.llm.provider,
+                detail=str(exc),
+            )
+            return None
 
     @staticmethod
     def _coverage(chosen: EngineChoice, model: SemanticModel) -> Any:

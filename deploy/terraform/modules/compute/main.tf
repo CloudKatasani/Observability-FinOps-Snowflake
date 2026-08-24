@@ -39,6 +39,13 @@ locals {
     var.auth_client_id == null ? {} : { AUTH__CLIENT_ID = var.auth_client_id },
     var.llm_model_strong == null ? {} : { LLM__MODEL_STRONG = var.llm_model_strong },
     var.llm_model_fast == null ? {} : { LLM__MODEL_FAST = var.llm_model_fast },
+    # The key is named, not injected: SECRETS__PROVIDER is "aws", so the
+    # application resolves this ARN through Secrets Manager at the moment of
+    # use and the value never becomes an environment variable at all (§27.13).
+    # Bedrock authenticates with the task role and needs no key.
+    lookup(var.secret_arns, "llm_api_key", null) == null ? {} : {
+      LLM__API_KEY_REF = var.secret_arns["llm_api_key"]
+    },
     var.snowflake_account == null ? {} : { SNOWFLAKE__ACCOUNT = var.snowflake_account },
     var.snowflake_user == null ? {} : { SNOWFLAKE__USER = var.snowflake_user },
     var.snowflake_role == null ? {} : { SNOWFLAKE__ROLE = var.snowflake_role },
@@ -52,12 +59,15 @@ locals {
 
   # Injected by the ECS agent at container start from Secrets Manager. Values
   # never appear in the task definition, in Terraform state, or in a log line.
-  base_secrets = concat(
-    [{ name = "DATABASE_URL", valueFrom = var.secret_arns["app_database_url"] }],
-    lookup(var.secret_arns, "llm_api_key", null) == null ? [] : [
-      { name = "LLM__API_KEY", valueFrom = var.secret_arns["llm_api_key"] }
-    ],
-  )
+  #
+  # Only DATABASE_URL is injected this way, because SQLAlchemy needs the whole
+  # URL before anything else starts. The LLM key is not here on purpose: it is
+  # passed by ARN in LLM__API_KEY_REF above and read through the secrets
+  # adapter when a turn actually needs it, so it never exists as an environment
+  # variable a crash dump or a subprocess could pick up.
+  base_secrets = [
+    { name = "DATABASE_URL", valueFrom = var.secret_arns["app_database_url"] }
+  ]
 
   environment_list = [for k, v in local.base_environment : { name = k, value = v }]
 }

@@ -291,6 +291,50 @@ async def test_no_endpoint_returns_a_secret_value(two_tenants: Path) -> None:
         assert "secret_ref" not in lowered or "secret_value" not in lowered
 
 
+def test_the_llm_key_is_held_by_reference_and_resolved_only_at_use(
+    two_tenants: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§27.13: the key reaches the provider without passing through Settings.
+
+    The deployment used to inject the key into a settings field that did not
+    exist, so it was both leaked into the environment and silently ignored. It
+    is now a reference the secrets adapter resolves when a turn needs it.
+    """
+    monkeypatch.setenv("TEST_LLM_KEY", "sk-not-a-real-key-0123456789")
+    settings = Settings(
+        _env_file=None,
+        storage={"provider": "local", "bucket": str(two_tenants)},
+        llm={"provider": "anthropic", "api_key_ref": "env://TEST_LLM_KEY"},
+        secrets={"provider": "env"},
+    )
+    service = AgentService(settings, tenant="acme")
+
+    # The reference resolves for the code that needs it …
+    assert service._llm_api_key() == "sk-not-a-real-key-0123456789"
+    # … and the key itself is nowhere in the configuration object.
+    assert "sk-not-a-real-key" not in settings.model_dump_json()
+    assert settings.llm.api_key_ref == "env://TEST_LLM_KEY"
+
+
+def test_an_unresolvable_llm_key_degrades_instead_of_failing_the_request(
+    two_tenants: Path,
+) -> None:
+    """§19: a missing credential must never take the platform down with it."""
+    settings = Settings(
+        _env_file=None,
+        storage={"provider": "local", "bucket": str(two_tenants)},
+        llm={"provider": "anthropic", "api_key_ref": "env://NOT_SET_ANYWHERE"},
+        secrets={"provider": "env"},
+    )
+    service = AgentService(settings, tenant="acme")
+    assert service._llm_api_key() is None
+
+    # And a question still gets a grounded answer from the metric layer.
+    result = service.ask("how many credits did we use")
+    assert result.answer
+    assert not result.trace.steps[0].detail.get("api_key")
+
+
 # ------------------------------------------------------------------- caching
 def test_the_result_cache_cannot_serve_one_tenant_s_rows_to_another(
     two_tenants: Path,
