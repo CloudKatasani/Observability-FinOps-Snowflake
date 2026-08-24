@@ -163,10 +163,11 @@ different things. Utilisation plus queueing separates "too big" from "busy".
 ### 3 · Chargeback (`/chargeback`) — two and a half minutes. The centrepiece.
 
 The **reconciliation gate banner** is at the top, before any figure. On the shipped
-fixture it passes, and reads in this form — your credit figures will differ,
-because the generated window ends today:
+fixture it passes, and reads in this form at the default "Last 30 days" — your
+credit figures will differ, because the generated window ends today, and the
+page follows the time picker, so a wider range shows a larger bill:
 
-> Reconciled: allocated 178826.77 credits vs metered 178825.29 (+0.001%), within ±0.5%.
+> Reconciled: allocated 52871.31 credits vs metered 52869.82 (+0.003%), within ±0.5%.
 
 Say why that banner exists: allocated cost reconciles to the metered bill or the
 chargeback figures **do not publish** (R6). When the gate fails, the team table is
@@ -185,6 +186,11 @@ Two things to point out:
 
 - `UNATTRIBUTED` appears in the table as a first-class line, not hidden. Unowned
   cost is a finding, not a rounding error.
+- **Cloud services reads 0.0 for every team, and that is the right answer.** The
+  metric is cloud-services credits *net of the daily adjustment*: Snowflake
+  bills only the portion above 10% of that day's compute, and the fixture stays
+  under the allowance, as many real accounts do. Worth saying out loud — a
+  column of zeros is the one place an audience assumes something is broken.
 - Expand the SQL disclosure: the allocation is four compiled statements and **all
   four are shown**, each labelled with what it contributes.
 
@@ -192,9 +198,10 @@ Then switch the **scope** selector to `ACME_SANDBOX` and watch the banner
 re-run. The allocation, the cloud-services apportionment and the metered total
 the gate checks against are all scoped together — the sandbox reconciles against
 the sandbox's bill, not the group's, which would report a variance of most of
-the fleet and block a figure that is correct. Unattributed cost jumps from 24%
-to 77%, which is the same finding as step 1a arriving on the page where somebody
-has to pay for it.
+the fleet and block a figure that is correct — the sandbox reconciles against
+1,526 credits, not the group's 52,870. Unattributed cost jumps from 25% to 80%,
+which is the same finding as step 1a arriving on the page where somebody has to
+pay for it.
 
 Pick an account with no data at all and the page refuses by name rather than
 allocating zero: an empty allocation reconciles perfectly against an empty bill,

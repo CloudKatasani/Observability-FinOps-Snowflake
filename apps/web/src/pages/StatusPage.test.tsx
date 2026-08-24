@@ -8,7 +8,7 @@ const NOT_REQUIRED_DETAIL =
   "Not used by this deployment — Redis is the background worker's queue, and this process " +
   "runs no worker. Set READINESS__REQUIRE_REDIS=true to gate on it.";
 
-const responses: Record<string, { status: number; body: unknown }> = {
+const responses: Record<string, StubbedResponse> = {
   "/healthz": { status: 200, body: { status: "ok", version: "0.1.0" } },
   "/readyz": {
     status: 503,
@@ -36,8 +36,13 @@ const responses: Record<string, { status: number; body: unknown }> = {
   },
 };
 
-function stub(readyz: { status: number; body: unknown }) {
-  const table = { ...responses, "/readyz": readyz };
+type StubbedResponse = { status: number; body: unknown };
+
+function stub(readyz: StubbedResponse) {
+  // Annotated rather than inferred: spreading a Record into a literal with an
+  // explicit key narrows the result to that key, and the lookup below then
+  // fails to compile under `tsc -b`.
+  const table: Record<string, StubbedResponse> = { ...responses, "/readyz": readyz };
   vi.stubGlobal(
     "fetch",
     vi.fn(async (path: string) => {
