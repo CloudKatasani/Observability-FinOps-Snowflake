@@ -36,6 +36,18 @@ _SPECIALISTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "Access, grant drift, dormancy, tagging and policy coverage.",
         _BASE_TOOLS,
     ),
+    "usage": (
+        "Adoption and consumption patterns: who uses what, how much, and how it is changing.",
+        (*_BASE_TOOLS, "explain_delta"),
+    ),
+    "health": (
+        "Platform health as a state: what is failing, stale, or saturated, and its blast radius.",
+        (*_BASE_TOOLS, "explain_delta"),
+    ),
+    "org": (
+        "Cross-account roll-ups, account comparison, contracts and commitment burn-down.",
+        (*_BASE_TOOLS, "explain_delta"),
+    ),
     "optimisation": (
         "Lever ranking, simulation, and change drafting.",
         (*_BASE_TOOLS, "explain_delta"),

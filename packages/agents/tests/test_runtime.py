@@ -312,6 +312,48 @@ def test_specialists_only_get_the_tools_their_role_needs() -> None:
         assert "run_sql_guarded" not in agent.tool_names
 
 
+def test_health_and_sre_state_the_boundary_between_them() -> None:
+    """Two agents on adjacent ground need to know which half is theirs.
+
+    Health answers "is it working and how badly is it not"; SRE answers "why is
+    this particular thing behaving like that". Without the split written down
+    they converge, and a question gets a root-cause essay when it wanted a
+    status, or a status when it wanted a diagnosis.
+    """
+    health = " ".join(build_agent("health").system_prompt.lower().split())
+    sre = " ".join(build_agent("sre").system_prompt.lower().split())
+
+    assert "sre agent" in health, "the health agent must name where it hands over"
+    assert "blast radius" in health
+    assert "root" in sre  # the SRE agent's own framing is root-cause
+
+
+def test_the_org_agent_states_what_organization_usage_cannot_answer() -> None:
+    """The single most important thing in the org prompt.
+
+    ORGANIZATION_USAGE covers every account but has no queries, users, or
+    tables; ACCOUNT_USAGE has the detail but only for connected accounts. An
+    agent that does not know this reports a partial roll-up as the whole
+    organization, which is the failure mode this specialist exists to avoid.
+    """
+    prompt = " ".join(build_agent("org").system_prompt.lower().split())
+    assert "organization_usage" in prompt and "account_usage" in prompt
+    assert "no queries" in prompt or "has no queries" in prompt
+    # And it must say what to do about the gap, not merely that it exists.
+    assert "name the accounts you could not include" in prompt
+
+
+def test_the_usage_agent_declines_individual_performance_inference() -> None:
+    """R8/governance: the same refusal the shared rules make, in its own words.
+
+    Usage data is exactly where this request arrives — "who are my heaviest
+    users" is one question away from "who is my least productive engineer".
+    """
+    prompt = " ".join(build_agent("usage").system_prompt.lower().split())
+    assert "productivity" in prompt or "productive" in prompt
+    assert "decline" in prompt or "not a question this data can answer" in prompt
+
+
 def test_an_unknown_specialist_is_a_configuration_error() -> None:
     from snowobs_common.errors import ConfigurationError
 
@@ -332,6 +374,21 @@ def test_an_unknown_specialist_is_a_configuration_error() -> None:
         ("what should we right-size to save money", "optimisation"),
         ("which sources am I missing", "onboarding"),
         ("publish a data product for finance", "curator"),
+        # Usage: what is being consumed and by whom, as distinct from cost.
+        ("who are the heaviest users", "usage"),
+        ("what is our cortex adoption", "usage"),
+        ("which warehouses are never queried", "usage"),
+        # Health: is it working, and how badly is it not — as distinct from the
+        # SRE agent's root-cause investigation of one named object.
+        ("is everything healthy", "health"),
+        ("what is our platform health status", "health"),
+        ("what is the success rate of our tasks", "health"),
+        # Organization: across accounts, and against what was committed to.
+        ("which account costs the most", "org"),
+        ("compare accounts by credit consumption", "org"),
+        ("how much of our commitment have we used", "org"),
+        ("what is our runway on the capacity contract", "org"),
+        ("show egress and data transfer cost", "org"),
     ],
 )
 def test_questions_reach_the_specialist_that_owns_them(
