@@ -98,6 +98,55 @@ All notable changes to this project are documented here. The format follows
 - **Generated `docs/KPI_CATALOG.md`** (`make catalog`) — from the YAML, never by
   hand.
 
+### Added — Phase 7 (Data product management)
+
+- **Data product registry** (`packages/dataproducts/products/`): four seed
+  products declared in YAML — Platform Cost & Attribution, Warehouse & Compute
+  Efficiency, Pipeline Reliability, and Security & Access Governance — each
+  naming the governed metrics it exposes, its owner, consumers, refresh cadence,
+  SLA, classification, and release history. Cross-validated against the semantic
+  layer at load: a product that references a metric the platform cannot compute,
+  publishes a dimension no entity resolves, promises a freshness its slowest
+  source cannot deliver (R7), mixes time grains in one relation, or indexes a
+  sensitive column for search does not load at all.
+- **Derived data contracts** (`contracts.py`): column-level schema with types,
+  nullability, units, and the governed metric behind every measure; grain and
+  row-count expectations per relation; a freshness guarantee taken as the
+  *maximum* documented source latency, never an average. `validate_against()`
+  reports drift when the semantic layer moves under a published contract.
+- **Change classification and the version gate**: `diff(old, new)` classifies
+  every change breaking or additive and **refuses a version bump too small for
+  what changed** — a withdrawn column, a retype, a relaxed nullability, a
+  changed grain, a loosened freshness guarantee, or shortened retention cannot
+  ship as a patch or a minor (§13.3). Release notes are drafted from the diff.
+- **Artifact emitters** (`emitters/`), pure and deterministic, every one pinned
+  by a golden file: dbt project (models from the compiled metric SQL with
+  `source()` references, `schema.yml`, and generated grain/row-count/freshness
+  tests), secure-view DDL, masking and row-access policies, `CREATE SEMANTIC
+  VIEW` with the `AI_VERIFIED_QUERIES` clause, `CREATE CORTEX SEARCH SERVICE`,
+  `CREATE ORGANIZATION LISTING` with its YAML manifest, and a product-scoped
+  `CREATE AGENT` spec. Non-additive measures are published as semantic-view
+  facts rather than metrics, so no consumer tool can re-average a ratio into a
+  wrong number (R12).
+- **Publish workflow** (`publish.py`): draft → proposed → approved → published →
+  deprecated → retired, with every transition recording actor, timestamp, and
+  reason. Nothing publishes without a recorded approval (R8), and publication
+  runs six preflight gates — contract validity, dual-engine compilation,
+  freshness achievability, version policy, migration note, and a blanket-grant
+  audit of the generated SQL — refusing with the specific failing check. It
+  emits a bundle (SQL scripts, listing manifest, contract, dbt project, and a
+  runbook with the validation checklist and rollback steps) and **never executes
+  DDL against a customer account** (R2).
+- **Product API** (`/api/v1/products`): catalogue, product detail with contract
+  drift, contract, diff against the previous published version, preflight,
+  propose/approve/publish/deprecate transitions, approval history, and bundle
+  download. Approvals require a named human and refuse an anonymous request.
+- **Generated `docs/DATA_CONTRACTS.md`** (`make contracts`) — from the product
+  YAML and the semantic layer, never by hand.
+- §25 re-verification of `AI_VERIFIED_QUERIES`, `CREATE ORGANIZATION LISTING`,
+  and `CREATE AGENT` syntax recorded in `docs/ASSUMPTIONS.md` §6a, closing most
+  of U-4; new assumptions A-18 to A-23.
+
 ### Deferred (recorded, not stubbed)
 
 - `Dockerfile.allinone`, `docker-compose.demo.yml`, `make demo`, Terraform,

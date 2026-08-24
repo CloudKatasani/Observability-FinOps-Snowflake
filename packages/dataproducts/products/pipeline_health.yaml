@@ -1,0 +1,74 @@
+# Pipeline Reliability (BUILD_PROMPT §13.1, D5 + D6).
+id: pipeline_health
+name: Pipeline Reliability
+version: 1.0.0
+owner: data-engineering
+domain: pipeline
+status: draft
+classification: internal
+description: >
+  Task and dynamic-table reliability: success rate, failures attributed to the
+  root of the dependency graph rather than every leaf it broke, duration drift,
+  refresh lag against TARGET_LAG, and freshness SLA attainment. This is the
+  product an on-call engineer reads at 03:00, so it carries the coarsest honest
+  freshness of its sources and says so.
+
+metrics:
+  - pipe.task_success_rate
+  - pipe.task_failures
+  - pipe.root_failures
+  - pipe.skipped_downstream
+  - pipe.task_duration_p95
+  - pipe.dt_lag_vs_target
+  - pipe.dt_lag_breaches
+  - pipe.dt_refresh_failures
+  - dq.freshness_sla_attainment
+  - dq.sla_breach_count
+
+dimensions:
+  [task, graph_root, error_class, dynamic_table, database, task_schema, table_schema, sla_status]
+
+refresh:
+  target_lag_minutes: 60
+  cron: "5 * * * *"
+  description: Hourly rebuild, five minutes past the hour.
+
+sla:
+  # DYNAMIC_TABLE_REFRESH_HISTORY documents 3 h; TASK_HISTORY 45 min. The
+  # product promises the slower of the two (R7).
+  freshness_target_minutes: 180
+  availability_pct: "99.5"
+  retention_days: 365
+  support_channel: data-engineering@internal
+  deprecation_notice_days: 60
+
+row_expectations:
+  - entity: fact_task_run
+    min_rows_per_day: 1
+  - entity: fact_dynamic_table_refresh
+    min_rows_per_day: 1
+
+search:
+  column: TASK
+  attributes: [DATABASE, TASK_SCHEMA, GRAPH_ROOT, ERROR_CLASS]
+  window_days: 30
+
+consumers:
+  - name: Data engineering on-call
+    contact: data-engineering@internal
+    purpose: Incident triage and root-failure identification.
+    grantee: ROLE_DATA_ENG
+  - name: Platform reliability review
+    contact: platform-engineering@internal
+    purpose: Weekly repeat-failure and lag-breach triage.
+    grantee: ROLE_PLATFORM_ENG
+
+documentation_url: https://internal.docs/data-products/pipeline-health
+categories: [IT_OPERATIONS, DATA_QUALITY]
+
+change_log:
+  - version: 1.0.0
+    released_on: "2026-08-24"
+    summary: >
+      First release — task reliability, dynamic-table refresh lag, and freshness
+      SLA attainment at hourly grain.

@@ -1,0 +1,207 @@
+product_id: warehouse_efficiency
+product_name: Warehouse & Compute Efficiency
+version: 1.0.0
+owner: platform-engineering
+domain: warehouse
+classification: internal
+freshness_guarantee_minutes: 480
+availability_pct: '99.0'
+retention_days: 365
+support_channel: platform-engineering@internal
+deprecation_notice_days: 60
+breaking_change_policy: 'Removing a column, changing its type, relaxing its nullability, rebinding it
+  to a different governed metric, changing the grain, loosening the freshness guarantee, or shortening
+  retention is a BREAKING change: it requires a major version, a migration note, and the full deprecation
+  notice period. Everything else is additive and ships as a minor or patch version.'
+datasets:
+- name: V_WAREHOUSE_EFFICIENCY_WAREHOUSE_METERING_HOURLY
+  entity: fact_warehouse_metering_hourly
+  description: 'Warehouse & Compute Efficiency: Warehouse metering (hourly).'
+  grain:
+  - TIME_BUCKET
+  - WAREHOUSE
+  time_grain: hour
+  columns:
+  - name: TIME_BUCKET
+    type: TIMESTAMP_LTZ
+    nullable: false
+    description: Time bucket over METERING_HOUR, at the coarsest grain the product's metrics declare.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WAREHOUSE
+    type: STRING
+    nullable: true
+    description: Warehouse the credits were metered against.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: true
+  - name: WH_UTILISATION_PCT
+    type: NUMBER(38,15)
+    nullable: true
+    description: Share of metered compute credits that queries actually accounted for. Low utilisation
+      with no queueing is the signature of an over-sized warehouse.
+    metric_id: wh.utilisation_pct
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WH_IDLE_PCT
+    type: NUMBER(38,15)
+    nullable: true
+    description: Metered credits with no attributable query, as a share of compute.
+    metric_id: wh.idle_pct
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WH_ZOMBIE_CREDITS
+    type: NUMBER(38,9)
+    nullable: true
+    description: Credits metered in hours where no query was attributed at all — a warehouse running with
+      nothing to do.
+    metric_id: wh.zombie_credits
+    unit: credits
+    sensitive: false
+    searchable: false
+  - name: WH_CLOUD_SERVICES_CREDITS
+    type: NUMBER(38,9)
+    nullable: true
+    description: Raw per-warehouse cloud-services credits. The daily 10% adjustment is an account-level
+      calculation and is deliberately NOT applied here — summing this column does not give a billable
+      figure (see cost.cloud_services_credits).
+    metric_id: wh.cloud_services_credits
+    unit: credits
+    sensitive: false
+    searchable: false
+  - name: COST_BY_WAREHOUSE_CREDITS
+    type: NUMBER(38,9)
+    nullable: true
+    description: Metered compute credits per warehouse.
+    metric_id: cost.by_warehouse_credits
+    unit: credits
+    sensitive: false
+    searchable: false
+  freshness_minutes: 480
+  expected_min_rows_per_day: 24
+  expected_max_rows_per_day: null
+  sources:
+  - query_attribution_history
+  - warehouse_metering_history
+- name: V_WAREHOUSE_EFFICIENCY_WAREHOUSE_LOAD_HOURLY
+  entity: fact_warehouse_load_hourly
+  description: 'Warehouse & Compute Efficiency: Warehouse load (hourly).'
+  grain:
+  - TIME_BUCKET
+  - WAREHOUSE
+  time_grain: hour
+  columns:
+  - name: TIME_BUCKET
+    type: TIMESTAMP_LTZ
+    nullable: false
+    description: Time bucket over LOAD_HOUR, at the coarsest grain the product's metrics declare.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WAREHOUSE
+    type: STRING
+    nullable: true
+    description: Warehouse the load was observed on.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: true
+  - name: WH_QUEUE_OVERLOAD_PCT
+    type: NUMBER(38,15)
+    nullable: true
+    description: Share of total elapsed query time spent queued because the warehouse was already saturated
+      — the signal that a warehouse is under-provisioned.
+    metric_id: wh.queue_overload_pct
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WH_QUEUE_PROVISIONING_PCT
+    type: NUMBER(38,15)
+    nullable: true
+    description: Share of elapsed time spent waiting for compute to be provisioned.
+    metric_id: wh.queue_provisioning_pct
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WH_QUERY_COUNT
+    type: NUMBER(38,0)
+    nullable: true
+    description: Queries executed per warehouse-hour.
+    metric_id: wh.query_count
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WH_AVG_EXECUTION_MS
+    type: NUMBER(38,3)
+    nullable: true
+    description: Mean execution time per query on the warehouse.
+    metric_id: wh.avg_execution_ms
+    unit: null
+    sensitive: false
+    searchable: false
+  freshness_minutes: 45
+  expected_min_rows_per_day: 24
+  expected_max_rows_per_day: null
+  sources:
+  - query_history
+- name: V_WAREHOUSE_EFFICIENCY_WAREHOUSE
+  entity: dim_warehouse
+  description: 'Warehouse & Compute Efficiency: Warehouse.'
+  grain:
+  - WAREHOUSE
+  - CONFIGURED_SIZE
+  - SCALING_POLICY
+  time_grain: null
+  columns:
+  - name: WAREHOUSE
+    type: STRING
+    nullable: true
+    description: Warehouse name.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: true
+  - name: CONFIGURED_SIZE
+    type: STRING
+    nullable: true
+    description: Currently configured size.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: true
+  - name: SCALING_POLICY
+    type: STRING
+    nullable: true
+    description: STANDARD or ECONOMY multi-cluster scaling policy.
+    metric_id: null
+    unit: null
+    sensitive: false
+    searchable: true
+  - name: WH_MAX_CLUSTERS
+    type: NUMBER(38,0)
+    nullable: true
+    description: Maximum clusters a multi-cluster warehouse may scale out to.
+    metric_id: wh.max_clusters
+    unit: null
+    sensitive: false
+    searchable: false
+  - name: WH_AUTOSUSPEND_SECONDS
+    type: NUMBER(38,0)
+    nullable: true
+    description: Configured auto-suspend delay. Policy is ≤60 s for ELT warehouses and ≤300 s for BI warehouses;
+      longer settings burn idle credits between queries.
+    metric_id: wh.autosuspend_seconds
+    unit: seconds
+    sensitive: false
+    searchable: false
+  freshness_minutes: 0
+  expected_min_rows_per_day: 1
+  expected_max_rows_per_day: null
+  sources:
+  - warehouses

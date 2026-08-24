@@ -1,0 +1,188 @@
+version: 2
+models:
+- name: access_governance_login
+  description: 'Security & Access Governance: Login attempt. Grain: TIME_BUCKET, USER, CLIENT_TYPE, FIRST_FACTOR,
+    ERROR_CLASS, CLIENT_IP. Freshness guarantee 120 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: access_governance
+    product_version: 1.0.0
+    owner: security-engineering
+    entity: fact_login
+    grain:
+    - TIME_BUCKET
+    - USER
+    - CLIENT_TYPE
+    - FIRST_FACTOR
+    - ERROR_CLASS
+    - CLIENT_IP
+    freshness_minutes: 120
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over EVENT_AT, at the coarsest grain the product's metrics declare.
+    data_type: TIMESTAMP_LTZ
+    data_tests:
+    - not_null
+  - name: USER
+    description: User the attempt was made against.
+    data_type: STRING
+    meta:
+      sensitive: true
+      masking_policy: MP_SNOWOBS_SENSITIVE
+  - name: CLIENT_TYPE
+    description: "Reported driver or client (JDBC, PYTHON_DRIVER, SNOWFLAKE_UI, \u2026)."
+    data_type: STRING
+  - name: FIRST_FACTOR
+    description: "First authentication factor (PASSWORD, RSA_KEYPAIR, OAUTH, \u2026)."
+    data_type: STRING
+  - name: ERROR_CLASS
+    description: Snowflake error code of a failed attempt, or NONE.
+    data_type: STRING
+  - name: CLIENT_IP
+    description: Source IP of the attempt.
+    data_type: STRING
+    meta:
+      sensitive: true
+      masking_policy: MP_SNOWOBS_SENSITIVE
+  - name: SEC_FAILED_LOGINS
+    description: 'Count of failed authentication attempts. Per user and per source IP this is the shape
+      a credential-stuffing attempt makes: many failures against many users from few addresses, or many
+      failures against one user from many. Governed metric: sec.failed_logins.'
+    data_type: NUMBER(38,0)
+  - name: SEC_FAILED_LOGIN_RATE
+    description: "Share of authentication attempts that failed. A background rate of a few percent is\
+      \ normal \u2014 mistyped passwords, expired sessions. A step change on one user or one client type\
+      \ is not, and that is what the slice is for. Governed metric: sec.failed_login_rate."
+    data_type: NUMBER(38,15)
+  - name: SEC_SINGLE_FACTOR_LOGINS
+    description: "Successful logins that presented no second authentication factor. Snowflake blocks single-factor\
+      \ password sign-in from October 2026, so this is a migration burn-down: every login counted here\
+      \ is one that will stop working. Key-pair service authentication legitimately has no second factor\
+      \ and shows up here too \u2014 slice by first_factor to separate the two populations. Governed metric:\
+      \ sec.single_factor_logins."
+    data_type: NUMBER(38,0)
+  - name: SEC_DISTINCT_CLIENT_IPS
+    description: 'Number of distinct source addresses a user authenticated from. A service account pinned
+      to a network allowlist should be a small constant; a jump is either an infrastructure change nobody
+      mentioned or a credential in the wrong hands. Governed metric: sec.distinct_client_ips.'
+    data_type: NUMBER(38,0)
+- name: access_governance_grant
+  description: 'Security & Access Governance: Role grant to user. Grain: TIME_BUCKET, ROLE, GRANTEE, GRANTED_BY,
+    GRANTEE_TYPE, PRIVILEGE_TIER. Freshness guarantee 120 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: access_governance
+    product_version: 1.0.0
+    owner: security-engineering
+    entity: fact_grant
+    grain:
+    - TIME_BUCKET
+    - ROLE
+    - GRANTEE
+    - GRANTED_BY
+    - GRANTEE_TYPE
+    - PRIVILEGE_TIER
+    freshness_minutes: 120
+    expected_min_rows_per_day: 0
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over GRANTED_AT, at the coarsest grain the product's metrics declare.
+    data_type: TIMESTAMP_LTZ
+    data_tests:
+    - not_null
+  - name: ROLE
+    description: Role granted.
+    data_type: STRING
+  - name: GRANTEE
+    description: User the role was granted to.
+    data_type: STRING
+    meta:
+      sensitive: true
+      masking_policy: MP_SNOWOBS_SENSITIVE
+  - name: GRANTED_BY
+    description: Role that issued the grant.
+    data_type: STRING
+    meta:
+      sensitive: true
+      masking_policy: MP_SNOWOBS_SENSITIVE
+  - name: GRANTEE_TYPE
+    description: PERSON, SERVICE, or LEGACY_SERVICE.
+    data_type: STRING
+  - name: PRIVILEGE_TIER
+    description: PRIVILEGED for the account-administration roles, STANDARD otherwise.
+    data_type: STRING
+  - name: SEC_PRIVILEGED_GRANTS
+    description: "Live grants of ACCOUNTADMIN, SECURITYADMIN, or ORGADMIN. These roles can change billing,\
+      \ read every object, and rewrite the access model, so the right number is small, known, and unchanging\
+      \ \u2014 and any movement in it should be traceable to a ticket. Revoked grants are excluded so\
+      \ the figure is current holdings rather than everything ever granted. Governed metric: sec.privileged_grants."
+    data_type: NUMBER(38,0)
+  - name: SEC_NEW_GRANTS
+    description: 'Grants created inside the requested window, from GRANTS_TO_USERS.CREATED_ON. This is
+      the privilege-drift feed: a review reads it in date order and asks who approved each row. Sliced
+      by privilege_tier it separates routine team membership from a new administrator. Governed metric:
+      sec.new_grants.'
+    data_type: NUMBER(38,0)
+  - name: SEC_DISABLED_BUT_GRANTED_USERS
+    description: 'Disabled accounts that still hold live role grants. Disabling a user stops them logging
+      in but leaves the grant graph untouched, so this is the deprovisioning tail: the difference between
+      "cannot sign in today" and "has no access", which is the difference that matters if the account
+      is ever re-enabled. Governed metric: sec.disabled_but_granted_users.'
+    data_type: NUMBER(38,0)
+- name: access_governance_user
+  description: 'Security & Access Governance: User. Grain: USER, USER_TYPE, DEFAULT_ROLE, ACCOUNT_STATUS,
+    CREDENTIAL_TYPE. Freshness guarantee 120 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: access_governance
+    product_version: 1.0.0
+    owner: security-engineering
+    entity: dim_user
+    grain:
+    - USER
+    - USER_TYPE
+    - DEFAULT_ROLE
+    - ACCOUNT_STATUS
+    - CREDENTIAL_TYPE
+    freshness_minutes: 120
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: USER
+    description: User name.
+    data_type: STRING
+    meta:
+      sensitive: true
+      masking_policy: MP_SNOWOBS_SENSITIVE
+  - name: USER_TYPE
+    description: PERSON, SERVICE, or LEGACY_SERVICE.
+    data_type: STRING
+  - name: DEFAULT_ROLE
+    description: Role the user assumes on connect when none is specified.
+    data_type: STRING
+  - name: ACCOUNT_STATUS
+    description: Whether the user is currently disabled.
+    data_type: STRING
+  - name: CREDENTIAL_TYPE
+    description: "Credentials configured on the user \u2014 the key-pair rollout view."
+    data_type: STRING
+  - name: SEC_DORMANT_USERS
+    description: "Enabled users with no successful login in 90 days. Every one is a live credential with\
+      \ no owner watching it \u2014 the cheapest access risk to remove and the one most often left alone\
+      \ because nobody is sure who it belongs to. Age is measured against the newest login in the snapshot,\
+      \ so the cohort is stable between runs. Governed metric: sec.dormant_users."
+    data_type: NUMBER(38,0)
+  - name: SEC_USERS_WITHOUT_KEY_PAIR
+    description: 'Enabled users with no RSA public key configured. Sliced by user_type this is the key-pair
+      rollout backlog for service accounts, which cannot use interactive MFA and must move to key-pair
+      authentication before password sign-in is blocked. Governed metric: sec.users_without_key_pair.'
+    data_type: NUMBER(38,0)

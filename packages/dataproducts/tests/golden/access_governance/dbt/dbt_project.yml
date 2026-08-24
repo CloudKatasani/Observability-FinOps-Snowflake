@@ -1,0 +1,25 @@
+name: access_governance
+version: 1.0.0
+config-version: 2
+profile: access_governance
+model-paths:
+- models
+test-paths:
+- tests
+target-path: target
+clean-targets:
+- target
+- dbt_packages
+models:
+  access_governance:
+    +materialized: table
+    +on_schema_change: append_new_columns
+    +database: OBSERVABILITY
+    +schema: PUBLISHED
+    +tags:
+    - security
+    - restricted
+vars:
+  product_id: access_governance
+  product_version: 1.0.0
+  freshness_target_minutes: 240

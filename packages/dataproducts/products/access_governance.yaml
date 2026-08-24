@@ -1,0 +1,77 @@
+# Security & Access (BUILD_PROMPT §13.1, D7).
+id: access_governance
+name: Security & Access Governance
+version: 1.0.0
+owner: security-engineering
+domain: security
+status: approved
+classification: restricted
+description: >
+  Authentication and privilege posture: failed logins and their error classes,
+  single-factor authentication still in use ahead of the October 2026 MFA
+  cut-off, client-IP spread per user, privileged and newly granted roles, and
+  identities that are dormant or hold grants while disabled. Restricted: the
+  product carries per-user activity and is masked and row-secured on publication.
+
+metrics:
+  - sec.failed_logins
+  - sec.failed_login_rate
+  - sec.single_factor_logins
+  - sec.distinct_client_ips
+  - sec.privileged_grants
+  - sec.new_grants
+  - sec.disabled_but_granted_users
+  - sec.dormant_users
+  - sec.users_without_key_pair
+
+dimensions:
+  [user, client_type, first_factor, error_class, client_ip, role, grantee, granted_by,
+   grantee_type, privilege_tier, user_type, default_role, account_status, credential_type]
+
+sensitive_columns: [USER, CLIENT_IP, GRANTEE, GRANTED_BY]
+
+refresh:
+  target_lag_minutes: 240
+  cron: "30 */4 * * *"
+  description: Every four hours, on the half hour.
+
+sla:
+  # LOGIN_HISTORY, GRANTS_TO_USERS, and USERS all document 2 h.
+  freshness_target_minutes: 240
+  availability_pct: "99.9"
+  retention_days: 365
+  support_channel: security-engineering@internal
+  deprecation_notice_days: 90
+
+row_expectations:
+  - entity: fact_login
+    min_rows_per_day: 1
+  - entity: fact_grant
+    min_rows_per_day: 0
+  - entity: dim_user
+    min_rows_per_day: 1
+
+search:
+  column: ERROR_CLASS
+  attributes: [CLIENT_TYPE, FIRST_FACTOR]
+  window_days: 90
+
+consumers:
+  - name: Security engineering
+    contact: security-engineering@internal
+    purpose: Authentication posture monitoring and privilege drift review.
+    grantee: ROLE_SECURITY_ANALYST
+  - name: Internal audit
+    contact: internal-audit@internal
+    purpose: Quarterly access recertification evidence.
+    grantee: ROLE_AUDITOR
+
+documentation_url: https://internal.docs/data-products/access-governance
+categories: [SECURITY, IT_OPERATIONS]
+
+change_log:
+  - version: 1.0.0
+    released_on: "2026-08-24"
+    summary: >
+      First release — authentication posture, privilege drift, and dormant
+      identity measures.

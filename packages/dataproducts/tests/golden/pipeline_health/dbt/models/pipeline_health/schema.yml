@@ -1,0 +1,137 @@
+version: 2
+models:
+- name: pipeline_health_task_run
+  description: 'Pipeline Reliability: Task run. Grain: TIME_BUCKET, TASK, GRAPH_ROOT, ERROR_CLASS, DATABASE,
+    TASK_SCHEMA. Freshness guarantee 45 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: pipeline_health
+    product_version: 1.0.0
+    owner: data-engineering
+    entity: fact_task_run
+    grain:
+    - TIME_BUCKET
+    - TASK
+    - GRAPH_ROOT
+    - ERROR_CLASS
+    - DATABASE
+    - TASK_SCHEMA
+    freshness_minutes: 45
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over SCHEDULED_AT, at the coarsest grain the product's metrics declare.
+    data_type: TIMESTAMP_LTZ
+    data_tests:
+    - not_null
+  - name: TASK
+    description: Task name.
+    data_type: STRING
+  - name: GRAPH_ROOT
+    description: "Root task of the DAG the run belongs to \u2014 the roll-up key."
+    data_type: STRING
+  - name: ERROR_CLASS
+    description: Snowflake error code of the run, or NONE when it succeeded.
+    data_type: STRING
+  - name: DATABASE
+    description: Database the task is defined in.
+    data_type: STRING
+  - name: TASK_SCHEMA
+    description: Schema the task is defined in.
+    data_type: STRING
+  - name: PIPE_TASK_SUCCESS_RATE
+    description: 'Share of task runs that completed successfully. SKIPPED runs are in the denominator
+      on purpose: a graph that is repeatedly suspended is not delivering data, however healthy its individual
+      statements look. Governed metric: pipe.task_success_rate.'
+    data_type: NUMBER(38,15)
+  - name: PIPE_TASK_FAILURES
+    description: 'Count of task runs that ended in FAILED. Sliced by error class this separates the timeouts
+      from the genuinely broken SQL, which want different responses. Governed metric: pipe.task_failures.'
+    data_type: NUMBER(38,0)
+  - name: PIPE_ROOT_FAILURES
+    description: "Failures at the root of a task graph \u2014 the incidents worth paging on. A root failure\
+      \ suspends everything beneath it, so this count is what an alert should carry while the downstream\
+      \ SKIPPED runs stay context rather than separate notifications. Governed metric: pipe.root_failures."
+    data_type: NUMBER(38,0)
+  - name: PIPE_SKIPPED_DOWNSTREAM
+    description: 'Runs skipped because something upstream failed. Read against pipe.root_failures this
+      is the blast radius of an incident: one root failure, twelve tables that did not refresh. Governed
+      metric: pipe.skipped_downstream.'
+    data_type: NUMBER(38,0)
+  - name: PIPE_TASK_DURATION_P95
+    description: "95th-percentile wall-clock duration from scheduled time to completion, per task. Measured\
+      \ from *scheduled* rather than started time deliberately: a task that waits ten minutes for a warehouse\
+      \ has been late by ten minutes, whatever its statement timing says. The percentile is taken from\
+      \ a nearest-rank window computed over the task's retained history rather than through the PERCENTILE\
+      \ shim, because Snowflake estimates percentiles from a t-digest and DuckDB computes them exactly\
+      \ \u2014 a difference no task-duration tail has enough observations to absorb. Unit: seconds. Governed\
+      \ metric: pipe.task_duration_p95."
+    data_type: NUMBER(38,9)
+- name: pipeline_health_dynamic_table_refresh
+  description: 'Pipeline Reliability: Dynamic table refresh. Grain: TIME_BUCKET, DYNAMIC_TABLE, DATABASE,
+    TABLE_SCHEMA, SLA_STATUS. Freshness guarantee 180 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: pipeline_health
+    product_version: 1.0.0
+    owner: data-engineering
+    entity: fact_dynamic_table_refresh
+    grain:
+    - TIME_BUCKET
+    - DYNAMIC_TABLE
+    - DATABASE
+    - TABLE_SCHEMA
+    - SLA_STATUS
+    freshness_minutes: 180
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over REFRESH_START_AT, at the coarsest grain the product's metrics declare.
+    data_type: TIMESTAMP_LTZ
+    data_tests:
+    - not_null
+  - name: DYNAMIC_TABLE
+    description: Fully qualified dynamic table name.
+    data_type: STRING
+  - name: DATABASE
+    description: Database the dynamic table lives in.
+    data_type: STRING
+  - name: TABLE_SCHEMA
+    description: Schema the dynamic table lives in.
+    data_type: STRING
+  - name: SLA_STATUS
+    description: Whether the refresh met its declared TARGET_LAG.
+    data_type: STRING
+  - name: PIPE_DT_LAG_VS_TARGET
+    description: 'Actual lag as a fraction of declared TARGET_LAG. At or below 100% the table is meeting
+      the freshness contract it advertises; above it, downstream consumers are reading data older than
+      they were promised. Expressed as a ratio rather than raw seconds so tables with different targets
+      are comparable on one axis. Governed metric: pipe.dt_lag_vs_target.'
+    data_type: NUMBER(38,15)
+  - name: PIPE_DT_LAG_BREACHES
+    description: "Refreshes that started against data older than the table's TARGET_LAG. Refreshes with\
+      \ no declared target are excluded rather than counted as passing \u2014 an unstated SLA is not a\
+      \ met one. Governed metric: pipe.dt_lag_breaches."
+    data_type: NUMBER(38,0)
+  - name: PIPE_DT_REFRESH_FAILURES
+    description: "Refreshes that did not succeed, including UPSTREAM_FAILED \u2014 a dynamic table whose\
+      \ source failed is just as stale as one that failed itself, and the consumer cannot tell the difference.\
+      \ Governed metric: pipe.dt_refresh_failures."
+    data_type: NUMBER(38,0)
+  - name: DQ_FRESHNESS_SLA_ATTAINMENT
+    description: "Share of dynamic-table refreshes that met the table's own declared TARGET_LAG. Refreshes\
+      \ on tables with no target are excluded from both sides of the ratio rather than counted as successes\
+      \ \u2014 this measures attainment against stated SLAs, not the absence of one. Governed metric:\
+      \ dq.freshness_sla_attainment."
+    data_type: NUMBER(38,15)
+  - name: DQ_SLA_BREACH_COUNT
+    description: 'Number of refreshes that missed their declared target lag. Counted per refresh rather
+      than per table so a table that breaches every hour is visibly worse than one that breached once.
+      Governed metric: dq.sla_breach_count.'
+    data_type: NUMBER(38,0)

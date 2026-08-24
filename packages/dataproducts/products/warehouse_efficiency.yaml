@@ -1,0 +1,83 @@
+# Warehouse & Compute Efficiency (BUILD_PROMPT §13.1, D2).
+id: warehouse_efficiency
+name: Warehouse & Compute Efficiency
+version: 2.0.0
+owner: platform-engineering
+domain: warehouse
+status: published
+classification: internal
+description: >
+  Per-warehouse utilisation, idle and zombie credits, queueing, spill, and cost
+  per query — the evidence behind every right-sizing and consolidation
+  recommendation. Published hourly so a warehouse that starts queueing is
+  visible the same working day rather than at month end.
+
+metrics:
+  - wh.utilisation_pct
+  - wh.idle_pct
+  - wh.zombie_credits
+  - wh.cloud_services_credits
+  - cost.by_warehouse_credits
+  - wh.queue_overload_pct
+  - wh.queue_provisioning_pct
+  - wh.query_count
+  - wh.avg_execution_ms
+  - wh.credits_per_query
+  - wh.spill_query_share
+
+dimensions: [warehouse, warehouse_size]
+
+refresh:
+  target_lag_minutes: 60
+  cron: "15 * * * *"
+  description: Hourly rebuild, fifteen minutes past the hour.
+
+sla:
+  # QUERY_ATTRIBUTION_HISTORY documents 8 h; utilisation and idle both read it.
+  freshness_target_minutes: 480
+  availability_pct: "99.0"
+  retention_days: 365
+  support_channel: platform-engineering@internal
+  deprecation_notice_days: 60
+
+row_expectations:
+  - entity: fact_warehouse_metering_hourly
+    min_rows_per_day: 24
+  - entity: fact_warehouse_load_hourly
+    min_rows_per_day: 24
+  - entity: fact_query_execution
+    min_rows_per_day: 1
+
+consumers:
+  - name: Platform engineering
+    contact: platform-engineering@internal
+    purpose: Right-sizing, consolidation, and auto-suspend policy enforcement.
+    grantee: ROLE_PLATFORM_ENG
+  - name: FinOps
+    contact: finops-platform@internal
+    purpose: Sizing the idle and zombie components of the optimisation backlog.
+    grantee: ROLE_FINOPS_ANALYST
+
+documentation_url: https://internal.docs/data-products/warehouse-efficiency
+categories: [IT_OPERATIONS, COST_MANAGEMENT]
+
+change_log:
+  - version: 1.0.0
+    released_on: "2026-07-06"
+    summary: >
+      First release — utilisation, idle, queueing, and per-warehouse compute
+      credits at hourly grain.
+  - version: 2.0.0
+    released_on: "2026-08-24"
+    summary: >
+      Warehouse configuration columns (max clusters, auto-suspend seconds) moved
+      out of this product; they are point-in-time account metadata rather than
+      metered history and belong with the warehouse inventory. Query-side
+      efficiency measures (cost per query, spill share, average execution time)
+      added in their place.
+    breaking: true
+    migration_note: >
+      Consumers reading WH_MAX_CLUSTERS or WH_AUTOSUSPEND_SECONDS from
+      V_WAREHOUSE_EFFICIENCY_WAREHOUSE must read them from SHOW WAREHOUSES or
+      the warehouse inventory product instead. All other columns are unchanged;
+      1.x remains available for the 60-day deprecation window.

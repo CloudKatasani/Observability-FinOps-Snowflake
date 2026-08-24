@@ -1,0 +1,21 @@
+version: 2
+sources:
+- name: account_usage
+  database: SNOWFLAKE
+  schema: ACCOUNT_USAGE
+  description: Snowflake ACCOUNT_USAGE views. Read-only; the platform never writes here.
+  tables:
+  - name: GRANTS_TO_USERS
+    description: security · criticality important · documented latency 120 minutes · retention 0 days
+  - name: LOGIN_HISTORY
+    description: security · criticality important · documented latency 120 minutes · retention 365 days
+    loaded_at_field: EVENT_TIMESTAMP
+    freshness:
+      warn_after:
+        count: 120
+        period: minute
+      error_after:
+        count: 240
+        period: minute
+  - name: USERS
+    description: security · criticality important · documented latency 120 minutes · retention 0 days

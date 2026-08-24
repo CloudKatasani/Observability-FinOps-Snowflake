@@ -1,0 +1,47 @@
+version: 2
+sources:
+- name: account_usage
+  database: SNOWFLAKE
+  schema: ACCOUNT_USAGE
+  description: Snowflake ACCOUNT_USAGE views. Read-only; the platform never writes here.
+  tables:
+  - name: METERING_DAILY_HISTORY
+    description: cost · criticality core · documented latency 180 minutes · retention 365 days
+    loaded_at_field: USAGE_DATE
+    freshness:
+      warn_after:
+        count: 180
+        period: minute
+      error_after:
+        count: 360
+        period: minute
+  - name: QUERY_ATTRIBUTION_HISTORY
+    description: cost · criticality core · documented latency 480 minutes · retention 365 days
+    loaded_at_field: START_TIME
+    freshness:
+      warn_after:
+        count: 480
+        period: minute
+      error_after:
+        count: 960
+        period: minute
+  - name: QUERY_HISTORY
+    description: query · criticality core · documented latency 45 minutes · retention 365 days
+    loaded_at_field: START_TIME
+    freshness:
+      warn_after:
+        count: 45
+        period: minute
+      error_after:
+        count: 90
+        period: minute
+  - name: WAREHOUSE_METERING_HISTORY
+    description: cost · criticality core · documented latency 180 minutes · retention 365 days
+    loaded_at_field: START_TIME
+    freshness:
+      warn_after:
+        count: 180
+        period: minute
+      error_after:
+        count: 360
+        period: minute

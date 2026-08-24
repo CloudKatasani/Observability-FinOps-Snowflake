@@ -1,0 +1,25 @@
+name: pipeline_health
+version: 1.0.0
+config-version: 2
+profile: pipeline_health
+model-paths:
+- models
+test-paths:
+- tests
+target-path: target
+clean-targets:
+- target
+- dbt_packages
+models:
+  pipeline_health:
+    +materialized: table
+    +on_schema_change: append_new_columns
+    +database: OBSERVABILITY
+    +schema: PUBLISHED
+    +tags:
+    - pipeline
+    - internal
+vars:
+  product_id: pipeline_health
+  product_version: 1.0.0
+  freshness_target_minutes: 180

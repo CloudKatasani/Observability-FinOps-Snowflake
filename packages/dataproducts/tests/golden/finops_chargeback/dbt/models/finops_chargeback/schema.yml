@@ -1,0 +1,134 @@
+version: 2
+models:
+- name: finops_chargeback_query_execution
+  description: 'Platform Cost & Attribution: Query execution. Grain: TIME_BUCKET, TEAM, WAREHOUSE, DATABASE,
+    ALLOCATION_METHOD. Freshness guarantee 480 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: finops_chargeback
+    product_version: 1.1.0
+    owner: finops-platform
+    entity: fact_query_execution
+    grain:
+    - TIME_BUCKET
+    - TEAM
+    - WAREHOUSE
+    - DATABASE
+    - ALLOCATION_METHOD
+    freshness_minutes: 480
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over STARTED_AT, at the coarsest grain the product's metrics declare.
+    data_type: TIMESTAMP_LTZ
+    data_tests:
+    - not_null
+  - name: TEAM
+    description: Team from the query tag; UNATTRIBUTED when the tag is absent.
+    data_type: STRING
+  - name: WAREHOUSE
+    description: Warehouse the query ran on.
+    data_type: STRING
+  - name: DATABASE
+    description: Database context of the query.
+    data_type: STRING
+  - name: ALLOCATION_METHOD
+    description: "How the query's credits reach a team \u2014 directly from its own tag, or via the residual\
+      \ pool spread pro-rata over tagged usage (HLD \xA710.2)."
+    data_type: STRING
+  - name: CHARGEBACK_ALLOCATED_CREDITS
+    description: "Credits allocated to a team by its own query tags \u2014 the direct component of the\
+      \ three-part model (direct + idle share + cloud-services share, HLD \xA710.2). Read alone it under-states\
+      \ a team's true cost, because idle time and cloud services are not attributable per query; it is\
+      \ the component that can be defended query by query, which is why it is stated separately. Unit:\
+      \ credits. Governed metric: chargeback.allocated_credits."
+    data_type: NUMBER(38,9)
+  - name: COST_BY_TEAM_CREDITS
+    description: "Directly attributed credits by team, from the query tag. This is the direct component\
+      \ only \u2014 the full chargeback figure adds idle and cloud-services shares (see the allocation\
+      \ engine). Unit: credits. Governed metric: cost.by_team_credits."
+    data_type: NUMBER(38,9)
+  - name: CHARGEBACK_UNATTRIBUTED_CREDITS
+    description: 'Attributed credits carrying no team tag. This is the residual pool: it has to be spread
+      over the tagged teams pro-rata, which means every credit here is a credit somebody is being charged
+      for on an estimate rather than on evidence. Sliced by warehouse and user it becomes a tagging backlog.
+      Unit: credits. Governed metric: chargeback.unattributed_credits.'
+    data_type: NUMBER(38,9)
+  - name: CHARGEBACK_UNATTRIBUTED_SHARE
+    description: 'Fraction of allocated credits that reached a team by estimate rather than by tag. It
+      is the confidence figure that belongs next to every chargeback statement: at 5% the allocation is
+      defensible, at 30% it is a negotiation. Governed metric: chargeback.unattributed_share.'
+    data_type: NUMBER(38,15)
+- name: finops_chargeback_cost_daily
+  description: 'Platform Cost & Attribution: Cost by service type (daily). Grain: TIME_BUCKET, SERVICE_TYPE.
+    Freshness guarantee 180 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: finops_chargeback
+    product_version: 1.1.0
+    owner: finops-platform
+    entity: fact_cost_daily
+    grain:
+    - TIME_BUCKET
+    - SERVICE_TYPE
+    freshness_minutes: 180
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over USAGE_DAY, at the coarsest grain the product's metrics declare.
+    data_type: DATE
+    data_tests:
+    - not_null
+  - name: SERVICE_TYPE
+    description: "Snowflake service type (WAREHOUSE_METERING, SERVERLESS_TASK, AI_SERVICES, \u2026)."
+    data_type: STRING
+  - name: CHARGEBACK_METERED_CREDITS
+    description: "The account's metered credits by service type \u2014 the control total every allocation\
+      \ must sum back to. It is stated in this domain, rather than borrowed from D1, because the reconciliation\
+      \ gate needs both sides of the comparison to carry the same provenance and the same latency floor.\
+      \ Unit: credits. Governed metric: chargeback.metered_credits."
+    data_type: NUMBER(38,9)
+  - name: COST_BILLED_CREDITS
+    description: "Credits actually billed \u2014 compute plus cloud services net of the daily 10% adjustment.\
+      \ This is the figure the chargeback reconciliation gate reconciles allocated cost against (R6).\
+      \ Unit: credits. Governed metric: cost.billed_credits."
+    data_type: NUMBER(38,9)
+- name: finops_chargeback_warehouse_metering_hourly
+  description: 'Platform Cost & Attribution: Warehouse metering (hourly). Grain: TIME_BUCKET, WAREHOUSE.
+    Freshness guarantee 480 minutes.'
+  config:
+    materialized: table
+    on_schema_change: append_new_columns
+  meta:
+    product: finops_chargeback
+    product_version: 1.1.0
+    owner: finops-platform
+    entity: fact_warehouse_metering_hourly
+    grain:
+    - TIME_BUCKET
+    - WAREHOUSE
+    freshness_minutes: 480
+    expected_min_rows_per_day: 1
+    expected_max_rows_per_day: null
+  columns:
+  - name: TIME_BUCKET
+    description: Time bucket over METERING_HOUR, at the coarsest grain the product's metrics declare.
+    data_type: TIMESTAMP_LTZ
+    data_tests:
+    - not_null
+  - name: WAREHOUSE
+    description: Warehouse the credits were metered against.
+    data_type: STRING
+  - name: CHARGEBACK_RECONCILIATION_VARIANCE
+    description: "Metered warehouse compute minus the compute attributable to individual queries. The\
+      \ gap is expected, not an error: QUERY_ATTRIBUTION_HISTORY excludes idle time, queries under about\
+      \ 100 ms, and Adaptive Warehouse jobs (ASSUMPTIONS \xA75). What the reconciliation gate checks is\
+      \ that the gap stays explainable \u2014 a variance that grows without idle time growing means the\
+      \ attribution view has stopped seeing part of the workload. Unit: credits. Governed metric: chargeback.reconciliation_variance."
+    data_type: NUMBER(38,9)

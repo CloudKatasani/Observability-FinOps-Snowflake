@@ -1,0 +1,27 @@
+version: 2
+sources:
+- name: account_usage
+  database: SNOWFLAKE
+  schema: ACCOUNT_USAGE
+  description: Snowflake ACCOUNT_USAGE views. Read-only; the platform never writes here.
+  tables:
+  - name: DYNAMIC_TABLE_REFRESH_HISTORY
+    description: pipeline · criticality important · documented latency 180 minutes · retention 365 days
+    loaded_at_field: REFRESH_START_TIME
+    freshness:
+      warn_after:
+        count: 180
+        period: minute
+      error_after:
+        count: 360
+        period: minute
+  - name: TASK_HISTORY
+    description: pipeline · criticality core · documented latency 45 minutes · retention 365 days
+    loaded_at_field: SCHEDULED_TIME
+    freshness:
+      warn_after:
+        count: 45
+        period: minute
+      error_after:
+        count: 90
+        period: minute

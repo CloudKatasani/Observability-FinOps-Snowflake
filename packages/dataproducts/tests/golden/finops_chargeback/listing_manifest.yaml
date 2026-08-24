@@ -1,0 +1,109 @@
+title: Platform Cost & Attribution
+subtitle: Fully allocated Snowflake cost by team, warehouse, and database, alongside the metered and billed
+  account tota
+description: "Fully allocated Snowflake cost by team, warehouse, and database, alongside the metered and\
+  \ billed account totals the allocation reconciles against. Direct attributed compute, unattributed spend,\
+  \ and the reconciliation variance are published together so a chargeback figure is never read without\
+  \ the evidence that it reconciles (R6). Deliberately credit-denominated: spend in contract currency\
+  \ comes from ORGANIZATION_USAGE, which documents 72 hours of latency, and folding it in here would drag\
+  \ this product's whole freshness guarantee from eight hours to three days for every consumer.\n\nOwner:\
+  \ finops-platform · support: finops-platform@internal\nClassification: confidential\nFreshness guarantee:\
+  \ 8 h (the documented latency of the slowest source behind this product).\nAvailability target: 99.5%\
+  \ · retention: 365 days\nDeprecation notice: 90 days\n\nRelations (3):\n  - V_FINOPS_CHARGEBACK_QUERY_EXECUTION\
+  \ — 9 columns, grain TIME_BUCKET, TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD, freshness 8 h\n  - V_FINOPS_CHARGEBACK_COST_DAILY\
+  \ — 4 columns, grain TIME_BUCKET, SERVICE_TYPE, freshness 3 h\n  - V_FINOPS_CHARGEBACK_WAREHOUSE_METERING_HOURLY\
+  \ — 3 columns, grain TIME_BUCKET, WAREHOUSE, freshness 8 h\n\nGoverned metrics (7): chargeback.allocated_credits,\
+  \ chargeback.metered_credits, chargeback.reconciliation_variance, chargeback.unattributed_credits, chargeback.unattributed_share,\
+  \ cost.billed_credits, cost.by_team_credits\n\nBreaking-change policy: Removing a column, changing its\
+  \ type, relaxing its nullability, rebinding it to a different governed metric, changing the grain, loosening\
+  \ the freshness guarantee, or shortening retention is a BREAKING change: it requires a major version,\
+  \ a migration note, and the full deprecation notice period. Everything else is additive and ships as\
+  \ a minor or patch version."
+organization_profile: INTERNAL
+organization_targets:
+  access:
+  - all_accounts: true
+  support_contact: finops-platform@internal
+  approver_contact: finops-platform@internal
+auto_fulfillment:
+  refresh_schedule: 24 HOUR
+  refresh_type: SUB_DATABASE
+categories:
+- COST_MANAGEMENT
+- IT_OPERATIONS
+resources:
+  documentation: https://internal.docs/data-products/finops-chargeback
+  support: finops-platform@internal
+data_dictionary:
+  featured:
+  - database_name: OBSERVABILITY
+    objects:
+    - name: V_FINOPS_CHARGEBACK_QUERY_EXECUTION
+      schema: PUBLISHED
+      domain: VIEW
+    - name: V_FINOPS_CHARGEBACK_COST_DAILY
+      schema: PUBLISHED
+      domain: VIEW
+    - name: V_FINOPS_CHARGEBACK_WAREHOUSE_METERING_HOURLY
+      schema: PUBLISHED
+      domain: VIEW
+    - name: FINOPS_CHARGEBACK
+      schema: SEMANTIC
+      domain: SEMANTIC_VIEW
+usage_examples:
+- title: allocated credits by team
+  description: Answered from the product's own published views; the same SQL is a verified query on the
+    FINOPS_CHARGEBACK semantic view.
+  query: 'SELECT TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD, SUM(CHARGEBACK_ALLOCATED_CREDITS) AS CHARGEBACK_ALLOCATED_CREDITS
+
+    FROM OBSERVABILITY.PUBLISHED.V_FINOPS_CHARGEBACK_QUERY_EXECUTION
+
+    WHERE TIME_BUCKET >= DATEADD(day, -30, CURRENT_DATE())
+
+    GROUP BY TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD
+
+    ORDER BY CHARGEBACK_ALLOCATED_CREDITS DESC NULLS LAST
+
+    LIMIT 20;'
+- title: chargeback for TEAM_DATA_ENG
+  description: Answered from the product's own published views; the same SQL is a verified query on the
+    FINOPS_CHARGEBACK semantic view.
+  query: 'SELECT TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD, SUM(CHARGEBACK_ALLOCATED_CREDITS) AS CHARGEBACK_ALLOCATED_CREDITS
+
+    FROM OBSERVABILITY.PUBLISHED.V_FINOPS_CHARGEBACK_QUERY_EXECUTION
+
+    WHERE TIME_BUCKET >= DATEADD(day, -30, CURRENT_DATE())
+
+    GROUP BY TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD
+
+    ORDER BY CHARGEBACK_ALLOCATED_CREDITS DESC NULLS LAST
+
+    LIMIT 20;'
+- title: credits by team this month
+  description: Answered from the product's own published views; the same SQL is a verified query on the
+    FINOPS_CHARGEBACK semantic view.
+  query: 'SELECT TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD, SUM(COST_BY_TEAM_CREDITS) AS COST_BY_TEAM_CREDITS
+
+    FROM OBSERVABILITY.PUBLISHED.V_FINOPS_CHARGEBACK_QUERY_EXECUTION
+
+    WHERE TIME_BUCKET >= DATEADD(day, -30, CURRENT_DATE())
+
+    GROUP BY TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD
+
+    ORDER BY COST_BY_TEAM_CREDITS DESC NULLS LAST
+
+    LIMIT 20;'
+- title: which team spent the most last week
+  description: Answered from the product's own published views; the same SQL is a verified query on the
+    FINOPS_CHARGEBACK semantic view.
+  query: 'SELECT TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD, SUM(COST_BY_TEAM_CREDITS) AS COST_BY_TEAM_CREDITS
+
+    FROM OBSERVABILITY.PUBLISHED.V_FINOPS_CHARGEBACK_QUERY_EXECUTION
+
+    WHERE TIME_BUCKET >= DATEADD(day, -30, CURRENT_DATE())
+
+    GROUP BY TEAM, WAREHOUSE, DATABASE, ALLOCATION_METHOD
+
+    ORDER BY COST_BY_TEAM_CREDITS DESC NULLS LAST
+
+    LIMIT 20;'

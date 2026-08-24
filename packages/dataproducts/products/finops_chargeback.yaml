@@ -1,0 +1,82 @@
+# Platform Cost & Attribution — the chargeback data product (BUILD_PROMPT §13.1).
+#
+# Every metric below exists in the semantic registry; the contract, the views,
+# the semantic view, and the listing are all derived from that declaration, so
+# the product cannot promise a figure the platform cannot compute (R1, R5).
+id: finops_chargeback
+name: Platform Cost & Attribution
+version: 1.1.0
+owner: finops-platform
+domain: chargeback
+status: published
+classification: confidential
+description: >
+  Fully allocated Snowflake cost by team, warehouse, and database, alongside the
+  metered and billed account totals the allocation reconciles against. Direct
+  attributed compute, unattributed spend, and the reconciliation variance are
+  published together so a chargeback figure is never read without the evidence
+  that it reconciles (R6).
+
+  Deliberately credit-denominated: spend in contract currency comes from
+  ORGANIZATION_USAGE, which documents 72 hours of latency, and folding it in here
+  would drag this product's whole freshness guarantee from eight hours to three
+  days for every consumer.
+
+metrics:
+  - chargeback.allocated_credits
+  - cost.by_team_credits
+  - chargeback.unattributed_credits
+  - chargeback.unattributed_share
+  - chargeback.metered_credits
+  - cost.billed_credits
+  - chargeback.reconciliation_variance
+
+dimensions: [team, warehouse, database, allocation_method, service_type]
+
+refresh:
+  target_lag_minutes: 1440
+  cron: "0 5 * * *"
+  description: Daily rebuild after the previous UTC day closes in ACCOUNT_USAGE.
+
+sla:
+  # Bounded by QUERY_ATTRIBUTION_HISTORY at 8 h; the contract states the honest
+  # floor rather than the one finance would like (R7).
+  freshness_target_minutes: 480
+  availability_pct: "99.5"
+  retention_days: 365
+  support_channel: finops-platform@internal
+  deprecation_notice_days: 90
+
+row_expectations:
+  - entity: fact_query_execution
+    min_rows_per_day: 1
+  - entity: fact_cost_daily
+    min_rows_per_day: 1
+  - entity: fact_warehouse_metering_hourly
+    min_rows_per_day: 1
+
+consumers:
+  - name: Finance business partnering
+    contact: finance-bp@internal
+    purpose: Monthly chargeback close and budget variance reporting.
+    grantee: ROLE_FINANCE_ANALYST
+  - name: Engineering leadership
+    contact: eng-leads@internal
+    purpose: Team-level cost accountability and budget tracking.
+    grantee: ROLE_ENG_LEAD
+
+documentation_url: https://internal.docs/data-products/finops-chargeback
+categories: [COST_MANAGEMENT, IT_OPERATIONS]
+
+change_log:
+  - version: 1.0.0
+    released_on: "2026-07-06"
+    summary: >
+      First release — allocated and metered credits, unattributed spend, and
+      reconciliation variance by team, warehouse, and database.
+  - version: 1.1.0
+    released_on: "2026-08-24"
+    summary: >
+      Added billed credits — compute plus cloud services net of the daily 10%
+      adjustment — so the reconciliation target sits beside the metered total.
+      Additive only; every column released in 1.0.0 is unchanged.
