@@ -164,3 +164,40 @@ async def test_the_stream_emits_tool_steps_before_the_answer(settings: Settings)
     assert kinds.count("answer") == 1
     assert events[-1]["metrics"] == ["cost.billed_credits"]
     assert events[-1]["sources"] == ["metering_daily_history"]
+
+
+@pytest.mark.asyncio
+async def test_a_trace_can_be_looked_up_after_the_answer(settings: Settings) -> None:
+    """The trace id on an answer is only useful if something answers to it."""
+    async with client_for(settings) as client:
+        answer = (
+            await client.post(
+                "/api/v1/agents/ask", json={"question": "What were our billed credits?"}
+            )
+        ).json()
+
+        listing = (await client.get("/api/v1/agents/traces")).json()
+        recalled = (await client.get(f"/api/v1/agents/traces/{answer['trace_id']}")).json()
+
+    assert any(entry["trace_id"] == answer["trace_id"] for entry in listing["traces"])
+    # R7 applied to the platform's own storage: the endpoint says plainly that
+    # a missing trace is not evidence of a missing turn.
+    assert listing["durable"] is False
+    assert (
+        "not persisted" in listing["retention_note"]
+        or "lost on restart" in (listing["retention_note"])
+    )
+
+    assert recalled["answer"] == answer["answer"]
+    assert recalled["metrics_used"] == answer["metrics_used"]
+    assert recalled["sql"] == answer["sql"]
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_trace_says_what_its_absence_does_and_does_not_mean(
+    settings: Settings,
+) -> None:
+    async with client_for(settings) as client:
+        response = await client.get("/api/v1/agents/traces/does-not-exist")
+    assert response.status_code == 404
+    assert "does not mean the turn never happened" in response.text

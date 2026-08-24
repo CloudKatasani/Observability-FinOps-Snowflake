@@ -12,8 +12,15 @@ from collections.abc import Iterator
 from typing import Any
 
 from snowobs_agents.runtime.guardrails import BudgetTracker
-from snowobs_agents.runtime.supervisor import AgentDefinition, AgentRuntime, Supervisor, TurnResult
+from snowobs_agents.runtime.supervisor import (
+    AgentDefinition,
+    AgentRuntime,
+    Supervisor,
+    TurnResult,
+    turn_events,
+)
 from snowobs_agents.runtime.tools import ToolContext
+from snowobs_agents.runtime.trace import Trace, TraceStore
 from snowobs_agents.specialists.registry import agent_names, all_agents, build_agent
 from snowobs_common.config import Settings
 from snowobs_common.errors import ConfigurationError
@@ -43,6 +50,7 @@ class AgentService:
         # A tracker per process, so a runaway conversation is stopped by the
         # same accounting that stops a runaway script (§12.5).
         self._budget = _shared_budget()
+        self._traces = _shared_traces()
 
     def _storage_root(self) -> Any:
         from snowobs_api.services.datasets import storage_root
@@ -87,9 +95,13 @@ class AgentService:
                 raise ConfigurationError(
                     f"Unknown agent '{agent}'. Available: {', '.join(agent_names())}"
                 )
-            if agent is not None:
-                return runtime.run(build_agent(agent), question)
-            return Supervisor(runtime=runtime, agents=all_agents()).ask(question)
+            result = (
+                runtime.run(build_agent(agent), question)
+                if agent is not None
+                else Supervisor(runtime=runtime, agents=all_agents()).ask(question)
+            )
+            self._traces.save(result.trace)
+            return result
         finally:
             catalog.close()
 
@@ -109,14 +121,30 @@ class AgentService:
                 else Supervisor(runtime=runtime, agents=all_agents()).route(question)
             )
             yield {"event": "agent_selected", "agent": definition.name}
-            yield from runtime.stream(definition, question)
+            result = runtime.run(definition, question)
+            self._traces.save(result.trace)
+            yield from turn_events(result)
         finally:
             catalog.close()
 
 
 _BUDGET = BudgetTracker()
+_TRACES = TraceStore()
 
 
 def _shared_budget() -> BudgetTracker:
     """Daily spend is per actor and per tenant, so it outlives one request."""
     return _BUDGET
+
+
+def _shared_traces() -> TraceStore:
+    """Recent traces, so the id on an answer can be looked up afterwards."""
+    return _TRACES
+
+
+def recent_traces(limit: int = 20) -> list[Trace]:
+    return _TRACES.recent(limit)
+
+
+def get_trace(trace_id: str) -> Trace | None:
+    return _TRACES.get(trace_id)

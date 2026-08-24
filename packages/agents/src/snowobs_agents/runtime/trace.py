@@ -158,10 +158,23 @@ class Trace:
 
 @dataclass
 class TraceStore:
-    """In-process trace storage. Persisted to Postgres by the API layer."""
+    """Recent traces, held in memory and bounded.
+
+    Deliberately *not* the audit log. This is a ring buffer scoped to one
+    process: a trace saved by one API worker is invisible to the others, and
+    everything in it is lost on restart. It exists so that the trace id an
+    answer carries can be looked up while the answer is still on screen — which
+    is what "show me how you got that" needs in the moment.
+
+    Durable audit retention belongs in Postgres alongside the approval records
+    (§12.7); until that table exists, callers must not treat this as evidence.
+    ``durable`` is False so a caller can tell the difference rather than assume.
+    """
 
     traces: dict[str, Trace] = field(default_factory=dict)
     max_traces: int = 1000
+    #: Whether a trace absent from this store can be concluded not to exist.
+    durable: bool = False
 
     def save(self, trace: Trace) -> None:
         self.traces[trace.id] = trace

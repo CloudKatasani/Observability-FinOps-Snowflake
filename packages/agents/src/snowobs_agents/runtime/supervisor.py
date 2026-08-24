@@ -464,31 +464,7 @@ class AgentRuntime:
     # ---------------------------------------------------------------- stream
     def stream(self, agent: AgentDefinition, question: str) -> Iterator[dict[str, Any]]:
         """Stream a turn as SSE-ready events, tool steps surfaced as they happen."""
-        result = self.run(agent, question)
-        for step in result.trace.steps:
-            yield {
-                "event": step.kind.value,
-                "summary": step.summary,
-                "detail": step.detail,
-            }
-        yield {
-            "event": "answer",
-            "answer": result.answer,
-            "agent": agent.name,
-            "trace_id": result.trace.id,
-            "grounded": result.grounded,
-            # A consumer must not have to infer a refusal from `grounded`: a
-            # refusal and an answer that merely used no tools are different
-            # things, and only one of them should be shown as a finding.
-            "refused": result.refused,
-            "refusal_reason": result.trace.refusal_reason,
-            "metrics": result.trace.metrics_used,
-            "sources": result.trace.sources_used,
-            # R5 has to survive streaming. Without the SQL on the final frame a
-            # streaming client would have to re-ask the non-streaming endpoint
-            # to show its work — running every query a second time.
-            "sql": result.sql_shown,
-        }
+        yield from turn_events(self.run(agent, question))
 
 
 @dataclass
@@ -629,3 +605,37 @@ _ROUTING_KEYWORDS: dict[str, tuple[str, ...]] = {
         "idle",
     ),
 }
+
+
+def turn_events(result: TurnResult) -> Iterator[dict[str, Any]]:
+    """Render one finished turn as SSE-ready events.
+
+    Kept separate from ``AgentRuntime.stream`` so a caller that needs the
+    ``TurnResult`` itself — to record its trace, say — can have both without
+    running the turn twice.
+    """
+    for step in result.trace.steps:
+        yield {
+            "event": step.kind.value,
+            "summary": step.summary,
+            "elapsed_ms": step.elapsed_ms,
+            "detail": step.detail,
+        }
+    yield {
+        "event": "answer",
+        "answer": result.answer,
+        "agent": result.trace.agent,
+        "trace_id": result.trace.id,
+        "grounded": result.grounded,
+        # A consumer must not have to infer a refusal from `grounded`: a
+        # refusal and an answer that merely used no tools are different things,
+        # and only one of them should be shown as a finding.
+        "refused": result.refused,
+        "refusal_reason": result.trace.refusal_reason,
+        "metrics": result.trace.metrics_used,
+        "sources": result.trace.sources_used,
+        # R5 has to survive streaming. Without the SQL on the final frame a
+        # streaming client would have to re-ask the non-streaming endpoint to
+        # show its work — running every query a second time.
+        "sql": result.sql_shown,
+    }
