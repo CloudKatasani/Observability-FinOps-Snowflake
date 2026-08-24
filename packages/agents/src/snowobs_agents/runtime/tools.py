@@ -372,6 +372,12 @@ def _explain_delta(context: ToolContext, arguments: dict[str, Any]) -> ToolOutco
         "dimension": dimension,
         "period_a": [period_a.start.isoformat(), period_a.end.isoformat()],
         "period_b": [period_b.start.isoformat(), period_b.end.isoformat()],
+        # Span in days, reported for two reasons: a narrator saying "the last
+        # 30 days against the 30 before" is quoting a figure like any other and
+        # needs it grounded here, and comparing windows of unequal length is a
+        # mistake a reader can only catch if the lengths are on the result.
+        "period_a_days": (period_a.end - period_a.start).days + 1,
+        "period_b_days": (period_b.end - period_b.start).days + 1,
         "period_a_total": str(sum(totals[0].values(), Decimal(0))),
         "period_b_total": str(sum(totals[1].values(), Decimal(0))),
         "contributions": [

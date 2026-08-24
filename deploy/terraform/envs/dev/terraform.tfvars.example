@@ -1,0 +1,35 @@
+# cp terraform.tfvars.example terraform.tfvars, then edit.
+# No secret belongs in this file: connection strings, private keys, and API keys
+# are populated directly into Secrets Manager (see docs/RUNBOOK.md).
+
+name   = "snowobs-dev"
+region = "eu-west-1"
+
+# Bootstrap image. After the first deploy the pipeline updates the running task
+# definition, and Terraform stops owning the tag.
+image = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/snowobs:v0.1.0"
+
+domain_name    = "snowobs-dev.internal.acme.example"
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"
+
+data_lake_bucket_name = "acme-snowobs-dev-lake"
+
+# Who can reach the private load balancer.
+ingress_cidrs = ["10.0.0.0/8"]
+
+# Leave app_mode = "live" and fill these in once the Snowflake role exists
+# (deploy/terraform/snowflake). Until then the app runs and every KPI that needs
+# a source it cannot read explains itself rather than showing zero (R3).
+snowflake_account   = "acme-analytics"
+snowflake_user      = "SNOWOBS_SVC"
+snowflake_role      = "SNOWOBS_READER"
+snowflake_warehouse = "WH_SNOWOBS_APP"
+
+auth_provider = "oidc"
+auth_issuer   = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+
+# "none" keeps the deterministic agent path — grounded answers, no narrative,
+# no API key, no token spend.
+llm_provider = "none"
+
+github_repository = "acme/snowobs"

@@ -1,0 +1,43 @@
+# cp terraform.tfvars.example terraform.tfvars, then edit.
+# No secret belongs in this file. Connection strings, Snowflake private keys and
+# LLM API keys are written straight into Secrets Manager (docs/RUNBOOK.md).
+
+name   = "snowobs-prod"
+region = "eu-west-1"
+
+# Digest-pinned in production: a tag can be moved, a digest cannot, and
+# "which image was running during the incident" must have one answer.
+image = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/snowobs@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+domain_name    = "snowobs.internal.acme.example"
+hosted_zone_id = "Z0123456789ABCDEFGHIJ"
+ingress_cidrs  = ["10.0.0.0/8"]
+
+data_lake_bucket_name  = "acme-snowobs-prod-lake"
+alb_access_logs_bucket = "acme-elb-logs"
+
+auth_issuer    = "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+auth_client_id = "00000000-0000-0000-0000-000000000000"
+
+snowflake_account   = "acme-analytics"
+snowflake_user      = "SNOWOBS_SVC"
+snowflake_role      = "SNOWOBS_READER"
+snowflake_warehouse = "WH_SNOWOBS_APP"
+
+# Where the alarms go. Without this they fire into nothing.
+alarm_topic_arn = "arn:aws:sns:eu-west-1:123456789012:snowobs-oncall"
+
+# Standard profile (docs/AWS_COST.md). For Large:
+#   db_instance_class = "db.m6g.large"
+#   redis_node_type   = "cache.m6g.large"
+#   app_cpu = 2048, app_memory = 4096, app_min_count = 3, app_max_count = 12
+db_instance_class = "db.t4g.medium"
+redis_node_type   = "cache.t4g.small"
+
+# Move to "chargeback" only after the reconciliation gate has been green across
+# several closes (R6) and finance has signed off on the allocation method.
+finops_mode = "showback"
+
+# "none" is a fully working deployment: grounded answers from the governed
+# metric layer, with narrative generation disabled and no token spend.
+llm_provider = "none"

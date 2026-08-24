@@ -5,34 +5,94 @@ on:
     branches: [main]
   pull_request:
 
-# Phase 0 pipeline: lint, typecheck, unit tests, web build.
-# Later phases extend this with parity tests, agent evals, image builds,
-# Trivy scanning, and SBOM generation (BUILD_PROMPT §20.4).
+# Merge gates, in the order they fail fastest:
+#   lint / typecheck  →  unit tests  →  dual-engine parity (R1)  →  agent evals (§12.6)
+#   →  generated-artefact drift  →  Terraform  →  image build + Trivy + SBOM
+#
+# The parity suite and the agent evals are not "extra" jobs: a metric without a
+# passing parity test is not shipped, and an agent that fabricates a figure or
+# obeys an injection is a defect, not a regression to triage later.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   python:
+    name: python (lint, types, tests, parity, evals)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+
       - name: Sync workspace
         run: uv sync --all-packages --dev --frozen
+
       - name: Lint (ruff)
         run: |
           uv run ruff check .
           uv run ruff format --check .
+
       - name: Typecheck (mypy; strict on packages/)
-        run: uv run mypy packages apps
+        run: uv run mypy packages apps fixtures
+
       - name: Unit tests
-        run: uv run pytest -m "not snowflake" --cov --cov-report=term
+        run: uv run pytest -m "not snowflake" --cov --cov-report=term --cov-report=xml
 
       # R1: a metric without a passing parity test is not shipped. This gates merges.
       - name: Dual-engine parity
         run: make test-parity
 
+      # §12.6. The evals need a landed dataset, so seed one through the real
+      # ingestion path first — the same path `make demo` uses.
+      - name: Seed the fixture dataset
+        run: uv run python scripts/demo_seed.py --root .data --end-date 2026-08-24 --force
+
+      # Gates that always apply, in every mode: zero fabricated figures, zero
+      # injections obeyed (R12). The runner exits non-zero when a gate fails.
+      - name: Agent evals
+        run: make eval
+
+      - name: Coverage report
+        if: always()
+        run: uv run coverage report --fail-under=85
+
+  generated:
+    name: generated artefacts are in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync workspace
+        run: uv sync --all-packages --dev --frozen
+
+      # R4: the Snowflake grant list is derived from the source registry. A new
+      # source without its grant would silently under-provision a deployment.
+      - name: Snowflake grants match the source registry
+        run: uv run python scripts/gen_snowflake_grants.py --check
+
+      # The KPI catalogue and the data-product contracts are generated from YAML;
+      # a stale committed copy is documentation that lies.
+      - name: KPI catalogue and data contracts are current
+        run: |
+          uv run python -m snowobs_semantics.docgen
+          uv run python -m snowobs_dataproducts.docgen
+          git diff --exit-code -- docs/KPI_CATALOG.md docs/DATA_CONTRACTS.md
+
   web:
+    name: web (lint, types, tests, build)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,3 +114,100 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+  terraform:
+    name: terraform (fmt, validate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive deploy/terraform
+
+      # -backend=false: validation needs the providers, not the state bucket.
+      - name: Validate every root module
+        run: |
+          for dir in deploy/terraform/envs/dev deploy/terraform/envs/prod deploy/terraform/snowflake; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - name: Static analysis (checkov)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: deploy/terraform
+          framework: terraform
+          quiet: true
+          soft_fail: false
+          # CKV_AWS_18/21: the data-lake bucket has versioning and KMS; access
+          # logging for it is the customer's log-archive decision, not ours.
+          skip_check: CKV_AWS_18
+
+  image:
+    name: image (build, scan, SBOM)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the all-in-one image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.allinone
+          push: false
+          load: true
+          tags: snowobs:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image runs one command and exits: proof that the entrypoint, the
+      # venv, and the SPA bundle all landed where the Dockerfile says they did.
+      - name: Smoke-test the image
+        run: |
+          docker run --rm --entrypoint python snowobs:ci -c \
+            "import sys; sys.path.insert(0, '/app'); from allinone.asgi import DEFAULT_WEB_ROOT; \
+             assert (DEFAULT_WEB_ROOT / 'index.html').is_file(), DEFAULT_WEB_ROOT; \
+             import snowobs_api.main, snowobs_worker.main, snowobs_fixtures.cli; print('image ok')"
+
+      - name: Vulnerability scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: snowobs:ci
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Upload scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+      - name: SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: snowobs:ci
+          format: cyclonedx
+          output: sbom.cyclonedx.json
+          scan-type: image
+
+      - name: Publish the SBOM as a build artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cyclonedx.json
+          retention-days: 30

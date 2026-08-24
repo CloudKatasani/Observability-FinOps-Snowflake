@@ -1,0 +1,110 @@
+# The demo stack (BUILD_PROMPT §19, §24).
+#
+#   make demo          # or: docker compose -f docker-compose.demo.yml up -d --build --wait
+#
+# One command, no Snowflake account, no cloud credentials, no LLM API key. The
+# stack generates a synthetic Snowflake account, ingests it through the real
+# OFFLINE upload pipeline, and serves the API and the SPA on one port.
+#
+# Everything runs from the single all-in-one image, built once and reused by
+# both the seeder and the application, so the demo starts in one build rather
+# than four. The multi-service topology that AWS runs lives in
+# deploy/compose/docker-compose.yml and deploy/terraform/.
+#
+# No secret appears in this file. LLM__PROVIDER=none is what makes that
+# possible: with no provider configured the agents answer from the governed
+# metric layer and say plainly that narrative generation is disabled (§19).
+name: snowobs-demo
+
+x-snowobs-image: &snowobs-image
+  image: snowobs:demo
+  build:
+    context: .
+    dockerfile: Dockerfile.allinone
+  environment: &snowobs-env
+    # Postgres holds app metadata only; telemetry never lands here (R2).
+    DATABASE_URL: postgresql+asyncpg://snowobs:snowobs@postgres:5432/snowobs
+    REDIS_URL: redis://redis:6379/0
+    # OFFLINE lake on the container filesystem. Named explicitly rather than
+    # left to the default so the seeder and the app cannot disagree about it.
+    STORAGE__PROVIDER: local
+    STORAGE__BUCKET: /app/.data
+    SNOWOBS_MODE: offline
+    SNOWOBS_TENANCY: single
+    SNOWOBS_LOG_JSON: "true"
+    # R11/R12: no key, no narrative, still a working grounded agent.
+    LLM__PROVIDER: none
+    # Read-only demo: no ad-hoc SQL surface is opened just because it is a demo.
+    GUARDRAILS__ALLOW_ADHOC_SQL: "false"
+    FINOPS__MODE: showback
+    FINOPS__RECONCILE_TOLERANCE_PCT: "0.5"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: snowobs
+      POSTGRES_PASSWORD: snowobs
+      POSTGRES_DB: snowobs
+    volumes:
+      - demo-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U snowobs -d snowobs"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - demo-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # Generates the synthetic account and ingests it through the same pipeline a
+  # customer's own extracts go through, then exits. Re-running `make demo` is
+  # cheap: the seeder sees the landed data and returns immediately.
+  demo-seed:
+    <<: *snowobs-image
+    command:
+      - seed
+      - --root=/app/.data
+      - --seed=42
+      - --days=120
+      - --scale=small
+    environment:
+      <<: *snowobs-env
+    volumes:
+      - demo-data:/app/.data
+    restart: "no"
+
+  app:
+    <<: *snowobs-image
+    command: ["api", "worker"]
+    environment:
+      <<: *snowobs-env
+    ports:
+      - "${SNOWOBS_DEMO_PORT:-8080}:8080"
+    volumes:
+      - demo-data:/app/.data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      demo-seed:
+        condition: service_completed_successfully
+    # The image declares its own HEALTHCHECK (liveness on /healthz); `up --wait`
+    # honours it, so `make demo` returns only once the app really answers.
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  demo-data:
+  demo-postgres:
+  demo-redis:

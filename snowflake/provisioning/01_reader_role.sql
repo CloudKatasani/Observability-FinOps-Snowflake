@@ -1,5 +1,5 @@
 -- Observability & FinOps Platform for Snowflake — read-only provisioning
--- Generated 2026-08-24T03:08:54+00:00
+-- Generated 2026-08-24T04:31:47+00:00
 --
 -- Idempotent: safe to re-run. Read-only: this script grants SELECT on
 -- usage views through Snowflake's granular database roles and creates

@@ -136,3 +136,29 @@ def test_adhoc_sql_still_goes_through_the_guard_for_an_admin(
     )
     assert not allowed.is_error, allowed.content
     assert json.loads(allowed.content)["rows"]
+
+
+def test_explain_delta_reports_the_windows_it_compared(context: ToolContext) -> None:
+    """A narrator quoting the window is quoting a figure, so it must be grounded.
+
+    The deterministic answer opens "comparing the last 30 days against the 30
+    before them". With only the dates on the result and not the span, the
+    grounding check read those 30s as numbers the agent invented — and the
+    §12.6 fabrication gate, which is zero, failed on the demo dataset.
+    """
+    outcome = call(
+        context,
+        "explain_delta",
+        metric="cost.by_warehouse_credits",
+        dimension="warehouse",
+        period_a_start="2026-07-26",
+        period_a_end="2026-08-10",
+        period_b_start="2026-08-11",
+        period_b_end="2026-08-26",
+    )
+    assert not outcome.is_error, outcome.content
+    payload = json.loads(outcome.content)
+    assert payload["period_a_days"] == 16
+    assert payload["period_b_days"] == 16
+    # Unequal windows are a real mistake, and only visible if both are reported.
+    assert payload["period_a_days"] == payload["period_b_days"]

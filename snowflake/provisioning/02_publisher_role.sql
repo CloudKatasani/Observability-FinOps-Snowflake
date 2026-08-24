@@ -1,5 +1,5 @@
 -- Observability & FinOps Platform — data-product PUBLISHER role
--- Generated 2026-08-24T03:08:54+00:00
+-- Generated 2026-08-24T04:31:47+00:00
 --
 -- This role can create objects in ONE database, and nothing else. It is
 -- separate from the read-only role the platform connects with day to day,
