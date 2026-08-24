@@ -101,6 +101,10 @@ class MetricRequest(BaseModel):
     grain: TimeGrain | None = None
     limit: int = DEFAULT_LIMIT
     order: list[Order] = Field(default_factory=list)
+    #: Group by the time grain. False for a single-figure tile, which wants one
+    #: total for the period rather than the largest day within it. The time
+    #: *filter* still applies either way.
+    bucket_time: bool = True
     #: Row-level security predicates injected server-side (§17) — never from
     #: the browser, and never overridable by a caller-supplied filter.
     rls_filters: list[Filter] = Field(default_factory=list)
@@ -258,9 +262,15 @@ class SemanticCompiler:
             selects.append(f"{metric.expression} AS {_quote(metric.id.replace('.', '_'))}")
         return selects, groups
 
-    def _where(self, entity: Entity, request: MetricRequest, *, include_time: bool) -> list[str]:
+    def _where(self, entity: Entity, request: MetricRequest) -> list[str]:
+        """Predicates for one entity.
+
+        The time *filter* is independent of time *bucketing*: a single-figure
+        tile does not group by day, but it must still be restricted to the
+        requested period — otherwise it silently totals all of history.
+        """
         predicates: list[str] = []
-        if include_time and request.time_range and entity.time_column:
+        if request.time_range and entity.time_column:
             column = _quote(entity.time_column)
             predicates.append(
                 f"{column} >= {_literal(request.time_range.start.isoformat())} "
@@ -279,16 +289,16 @@ class SemanticCompiler:
         grain: TimeGrain,
         dimensions: Sequence[str],
         *,
-        include_time: bool,
+        bucket_time: bool,
     ) -> str:
         selects, groups = self._select_list(entity, metrics, dimensions)
-        if include_time and entity.time_column:
+        if bucket_time and entity.time_column:
             time_expression = _time_expression(entity, grain)
             selects.insert(0, f"{time_expression} AS {_quote(TIME_COLUMN_ALIAS)}")
             groups.insert(0, time_expression)
 
         sql = "SELECT\n  " + ",\n  ".join(selects) + f"\nFROM (\n{_indent(entity.sql)}\n) AS base"
-        predicates = self._where(entity, request, include_time=include_time)
+        predicates = self._where(entity, request)
         if predicates:
             sql += "\nWHERE " + "\n  AND ".join(f"({p})" for p in predicates)
         if groups:
@@ -302,11 +312,9 @@ class SemanticCompiler:
         request: MetricRequest,
         grain: TimeGrain,
     ) -> str:
-        include_time = (
-            entity.time_column is not None and request.grain is not TimeGrain.MONTH
-        ) or (entity.time_column is not None)
+        bucket_time = request.bucket_time and entity.time_column is not None
         sql = self._entity_cte(
-            entity, metrics, request, grain, request.dimensions, include_time=include_time
+            entity, metrics, request, grain, request.dimensions, bucket_time=bucket_time
         )
         sql += self._order_and_limit(request, metrics)
         return sql
@@ -324,7 +332,7 @@ class SemanticCompiler:
         to the shared grain first makes that impossible.
         """
         keys: list[str] = []
-        if any(self.model.entity(e).time_column for e in by_entity):
+        if request.bucket_time and any(self.model.entity(e).time_column for e in by_entity):
             keys.append(TIME_COLUMN_ALIAS)
         keys.extend(request.dimensions)
         if not keys:
@@ -351,7 +359,7 @@ class SemanticCompiler:
                 request,
                 grain,
                 request.dimensions,
-                include_time=entity.time_column is not None,
+                bucket_time=request.bucket_time and entity.time_column is not None,
             )
             ctes.append(f"{name} AS (\n{_indent(body)}\n)")
 
@@ -385,7 +393,11 @@ class SemanticCompiler:
         # Break ties deterministically on the grouping columns. Without this a
         # tile's rows can reorder between refreshes (and between engines) purely
         # because two rows share a value.
-        tiebreakers = [_quote(TIME_COLUMN_ALIAS)] if qualify or self._has_time(metrics) else []
+        tiebreakers = (
+            [_quote(TIME_COLUMN_ALIAS)]
+            if request.bucket_time and (qualify or self._has_time(metrics))
+            else []
+        )
         tiebreakers += [_quote(dimension) for dimension in request.dimensions]
         ordered_columns = {clause.split()[0] for clause in clauses}
         clauses += [column for column in tiebreakers if column not in ordered_columns]
@@ -412,7 +424,9 @@ class SemanticCompiler:
         latency_floor = max(m.latency_floor_minutes for m in metrics)
         provisional = self._is_provisional(metrics, request)
         columns = (
-            [TIME_COLUMN_ALIAS] if any(self.model.entity(e).time_column for e in entity_ids) else []
+            [TIME_COLUMN_ALIAS]
+            if request.bucket_time and any(self.model.entity(e).time_column for e in entity_ids)
+            else []
         )
         columns += list(request.dimensions)
         columns += [m.id.replace(".", "_").upper() for m in metrics]

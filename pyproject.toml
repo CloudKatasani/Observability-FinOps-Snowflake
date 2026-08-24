@@ -25,7 +25,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["apps/api", "apps/worker", "packages/common", "packages/semantics", "packages/ingest", "packages/engines", "packages/sqlguard", "packages/agents", "packages/llm", "packages/analytics", "packages/products", "packages/artifacts", "fixtures/generator"]
+src = ["apps/api", "apps/worker", "packages/common", "packages/semantics", "packages/ingest", "packages/engines", "packages/sqlguard", "packages/agents", "packages/llm", "packages/analytics", "packages/products", "packages/artifacts", "packages/finops", "packages/snowflake_live", "fixtures/generator"]
 
 [tool.ruff.lint]
 select = [
@@ -46,18 +46,24 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 convention = "google"
 
 [tool.ruff.lint.isort]
-known-first-party = ["snowobs_common", "snowobs_api", "snowobs_worker", "snowobs_semantics", "snowobs_ingest", "snowobs_engines", "snowobs_sqlguard", "snowobs_agents", "snowobs_llm", "snowobs_analytics", "snowobs_products", "snowobs_artifacts", "snowobs_fixtures"]
+known-first-party = ["snowobs_common", "snowobs_api", "snowobs_worker", "snowobs_semantics", "snowobs_ingest", "snowobs_engines", "snowobs_sqlguard", "snowobs_agents", "snowobs_llm", "snowobs_analytics", "snowobs_products", "snowobs_artifacts", "snowobs_finops", "snowobs_live", "snowobs_fixtures"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "S105", "S106"]  # asserts and dummy credentials in tests
 # This module renders SQL *text for an operator to review and run in their own
 # account* from registry-owned identifiers; the platform never executes it.
 "packages/ingest/src/snowobs_ingest/export_script_gen.py" = ["S608"]
+# Query()/Depends() in argument defaults is FastAPI's documented idiom, not the
+# mutable-default footgun B008 exists to catch.
+"apps/api/src/snowobs_api/routers/*.py" = ["B008"]
+# The capability probe composes tiny SELECTs from source-registry identifiers,
+# each vetted by _vet() against a bare-identifier pattern before interpolation.
+"packages/snowflake_live/src/snowobs_live/probe.py" = ["S608"]
 
 [tool.mypy]
 python_version = "3.12"
 plugins = ["pydantic.mypy"]
-mypy_path = ["packages/common/src", "packages/semantics/src", "packages/ingest/src", "packages/engines/src", "packages/sqlguard/src", "packages/agents/src", "packages/llm/src", "packages/analytics/src", "packages/products/src", "packages/artifacts/src", "apps/api/src", "apps/worker/src", "fixtures/generator/src"]
+mypy_path = ["packages/common/src", "packages/semantics/src", "packages/ingest/src", "packages/engines/src", "packages/sqlguard/src", "packages/agents/src", "packages/llm/src", "packages/analytics/src", "packages/products/src", "packages/artifacts/src", "packages/finops/src", "packages/snowflake_live/src", "apps/api/src", "apps/worker/src", "fixtures/generator/src"]
 explicit_package_bases = true
 # Strict typing is a rule for shipped library code (see the Definition of Done);
 # test modules are exercised by running them, not by annotating their fixtures.
@@ -72,7 +78,7 @@ module = ["pyarrow.*", "duckdb.*", "polars.*", "arq.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["snowobs_common.*", "snowobs_semantics.*", "snowobs_ingest.*"]
+module = ["snowobs_common.*", "snowobs_semantics.*", "snowobs_ingest.*", "snowobs_sqlguard.*", "snowobs_engines.*", "snowobs_finops.*", "snowobs_live.*"]
 strict = true
 
 [tool.pytest.ini_options]

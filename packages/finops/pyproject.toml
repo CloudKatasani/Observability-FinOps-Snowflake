@@ -1,0 +1,24 @@
+[project]
+name = "snowobs-finops"
+version = "0.1.0"
+description = "Cost attribution, chargeback allocation, reconciliation gate, and close workflow"
+requires-python = ">=3.12"
+dependencies = [
+    "snowobs-common",
+    "snowobs-semantics",
+    "snowobs-engines",
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+]
+
+[tool.uv.sources]
+snowobs-common = { workspace = true }
+snowobs-semantics = { workspace = true }
+snowobs-engines = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/snowobs_finops"]

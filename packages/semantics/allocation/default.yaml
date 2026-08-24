@@ -1,0 +1,90 @@
+# Chargeback allocation configuration (BUILD_PROMPT §10).
+#
+# The waterfall is first-match-wins and the order is configurable. Rules are
+# editable in the UI (drag to reorder, add a predicate), versioned, and every
+# change is an audited event. Re-running a closed period requires an explicit
+# restate action.
+id: default
+name: Default allocation policy
+version: 1
+
+waterfall:
+  # 1. The query tag is the most specific signal: the workload said who it was for.
+  - id: query_tag_team
+    method: query_tag
+    description: Team parsed from the query tag JSON.
+    json_path: team
+    enabled: true
+
+  # 2. The warehouse's owner tag: whoever owns the compute owns the cost.
+  - id: warehouse_owner_tag
+    method: object_tag
+    description: OWNER_TEAM object tag on the warehouse.
+    tag_name: OWNER_TEAM
+    enabled: true
+
+  # 3. The role the query ran under, mapped to a team.
+  - id: role_registry
+    method: role_map
+    description: Role → team registry.
+    enabled: true
+
+  # 4. The user, mapped to a team from the HR feed / OIDC group claim.
+  - id: user_registry
+    method: user_map
+    description: User → team registry.
+    enabled: true
+
+  # 5. Nothing matched. Public, ranked, and targeted for reduction — never hidden.
+  - id: unattributed
+    method: fallback
+    description: No rule matched; cost is reported as UNATTRIBUTED.
+    team: UNATTRIBUTED
+    enabled: true
+
+components:
+  # Direct: the query's own attributed credits.
+  direct:
+    source: query_attribution_history
+    description: Credits attributed to the team's own queries.
+
+  # Idle: metered minus attributed, spread across teams active on that warehouse
+  # in the trailing window, pro-rata to their direct usage. If you did not use
+  # it, you pay none of its idle.
+  idle_share:
+    basis: direct_usage_prorata
+    lookback_hours: 24
+    description: Warehouse idle credits shared among that warehouse's users.
+
+  # Cloud services: account-level, net of the daily 10% adjustment, spread
+  # pro-rata to compute. The adjustment is not attributable per warehouse.
+  cloud_services_share:
+    basis: compute_prorata
+    scope: account_day
+    description: Billed cloud-services credits shared pro-rata to compute.
+
+  storage:
+    basis: database_owner_tag
+    description: Storage allocated by the owning database's tag.
+
+  serverless:
+    basis: object_owner_tag
+    description: Serverless credits allocated by the owning object's tag.
+
+  ai:
+    basis: object_owner_tag
+    description: Cortex/AI credits allocated by the owning object's tag.
+
+reconciliation:
+  # R6: allocated total must reconcile to the metered bill or chargeback does
+  # not publish.
+  tolerance_pct: 0.5
+  source: metering_daily_history
+  compare_to: CREDITS_BILLED
+  on_failure: block_publication
+
+close:
+  # Showback for the first months, then chargeback (§10.4).
+  default_mode: showback
+  business_day: 3
+  dispute_window_days: 5
