@@ -1,6 +1,7 @@
 id: remaining_balance_daily
 snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.REMAINING_BALANCE_DAILY
 domain: cost
+scope: organization
 criticality: important
 edition_min: standard
 required_db_role: SNOWFLAKE.ORGANIZATION_BILLING_VIEWER

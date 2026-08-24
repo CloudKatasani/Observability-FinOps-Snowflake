@@ -288,6 +288,59 @@ All notable changes to this project are documented here. The format follows
   describes what exists and states plainly what does not (A-24, A-25).
 - New settings: `ALERTING__*` and `SECRETS__FILE_PATH` (§21).
 
+### Added — Phase 9 (Organization-wide observability foundations)
+
+- **Multi-account fixture generation** (`fixtures/generator`, new
+  `snowobs_fixtures.organization`): an `OrganizationConfig` of `AccountProfile`s
+  produces a fleet of Snowflake accounts under one organization through the
+  *same* `generate()` call as before. The shipped fleet is four accounts with
+  genuinely different characters — a large EU production account, a US
+  analytics account whose spend compounds, a poorly-tagged GCP sandbox, and a
+  Business-Critical Azure APAC account — across three clouds and four regions.
+  `generate(GeneratorConfig(...))` is unchanged in signature, return type, and
+  output; the new profile knobs (`scale_factor`, `compute_growth_per_day`,
+  `workload_mix`, `untagged_warehouses`) all default to neutral.
+- **All seven ORGANIZATION_USAGE views generated, and derived from the
+  accounts.** `WAREHOUSE_METERING_HISTORY` (org) and `STORAGE_DAILY_HISTORY`
+  are computed from each account's own ACCOUNT_USAGE rows, so the roll-up
+  reconciles to the accounts *exactly* — asserted to the cent in Decimal, never
+  a tolerance. `USAGE_IN_CURRENCY_DAILY` is priced off `RATE_SHEET_DAILY`
+  (`USAGE x EFFECTIVE_RATE`, to the cent), and `CONTRACT_ITEMS` /
+  `REMAINING_BALANCE_DAILY` are a real drawdown of a real commitment: free
+  usage, then rollover, then capacity, with the four balances tying to
+  commitment-minus-cumulative-spend every single day (A-30).
+- **Five organization-wide planted phenomena** in `ground_truth.py`, each with
+  subjects, a window, and a test: a runaway account, a stranded capacity
+  commitment, cross-cloud egress concentrated on one account, an account with
+  materially worse tagging discipline, and an account paying a worse effective
+  rate than its peers.
+- **`write_organization_csv`** writes one directory per account plus one
+  directory for the organization-scoped extracts, mirroring how an enterprise
+  exports; `snowobs-generate --organization` drives it from the CLI.
+- **Account-aware ingestion**: `_ACCOUNT` joins `_LOADED_AT`, `_SOURCE_VIEW`,
+  and `_BATCH_ID` as ingest metadata. `IngestPipeline` / `LakeWriter` take an
+  `account`, `ingest_directory(dir, account=...)` stamps every row of the
+  batch, and an undeclared account lands as NULL rather than a guess (A-29).
+- **`scope: account | organization`** on `SourceDefinition`, set for the seven
+  ORGANIZATION_USAGE sources. Account-scoped sources now deduplicate on their
+  declared grain **plus** the account stamp — without it, two accounts' extracts
+  collide on `QUERY_ID` or `(WAREHOUSE_ID, START_TIME)` and one account's entire
+  history disappears behind last-write-wins with no error (A-31).
+- **Per-account coverage**: `DuckDBCatalog.accounts()` / `accounts_for()` /
+  `stats(source, account)`, and `SourceCoverage.accounts` plus
+  `CoverageMatrix.account_matrix(account)` — so "account X has query history
+  landed, account Y only has billing" is a reportable answer. The existing
+  single-account shape is unchanged, with an empty per-account list.
+
+### Fixed
+
+- **The generator was not deterministic across processes.** `QUERY_HISTORY`'s
+  `SESSION_ID` was derived from Python's `hash()`, which is randomised per
+  process, so the same seed produced different output on every run. It is now a
+  SHA-256 digest of the query id; every other generated file is byte-for-byte
+  unchanged, and pinned digests now guard the whole single-account extract
+  against silent drift (A-32).
+
 ### Fixed — found by running the software, not by reading it
 
 - **LIVE mode was unreachable.** `packages/snowflake_live` was complete and

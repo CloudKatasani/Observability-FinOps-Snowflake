@@ -31,7 +31,7 @@ from snowobs_fixtures.account import (
     Warehouse,
     business_factor,
 )
-from snowobs_fixtures.config import GeneratorConfig
+from snowobs_fixtures.config import DEFAULT_WORKLOAD_WEIGHTS, ONE, GeneratorConfig
 from snowobs_fixtures.ground_truth import GroundTruth
 
 UTC_OFFSET = "-07:00"  # account timezone rendered into TIMESTAMP_LTZ strings
@@ -70,6 +70,18 @@ def _query_id(seed: int, day: date, index: int) -> str:
     return f"01b{digest[:5]}-{digest[5:9]}-{digest[9:13]}-{digest[13:17]}-{digest[17:29]}"
 
 
+def _session_id(query_id: str) -> str:
+    """A stable numeric session id derived from the query id.
+
+    Derived from a digest rather than ``hash()``: Python randomises string
+    hashing per process, so a ``hash()``-derived column makes the generator
+    non-deterministic *between runs* even though the seed is fixed — which
+    defeats the point of a fixture whose output is asserted against.
+    """
+    digest = hashlib.sha256(f"{query_id}:session".encode()).hexdigest()
+    return str(int(digest[:15], 16) % 10**12)
+
+
 def running_hours(wh: Warehouse, day: date, gt: GroundTruth) -> float:
     """Hours the warehouse has at least one cluster running on this day."""
     is_weekend = day.weekday() >= 5
@@ -106,10 +118,21 @@ def clusters_running(wh: Warehouse, day: date, gt: GroundTruth | None = None) ->
     return 1.0 + (wh.max_clusters - 1) * 0.25
 
 
-def warehouse_credits(wh: Warehouse, day: date, gt: GroundTruth) -> Decimal:
-    """Metered compute credits for a warehouse-day."""
+def warehouse_credits(
+    wh: Warehouse, day: date, gt: GroundTruth, multiplier: Decimal = ONE
+) -> Decimal:
+    """Metered compute credits for a warehouse-day.
+
+    ``multiplier`` is the account profile's relative scale for the day (size x
+    compounding growth). It is applied once, here, so that metering, hourly
+    metering, and query attribution all move together — an account that grows
+    grows in every table rather than only in the billing one.
+    """
     hours = running_hours(wh, day, gt)
-    return _dec(hours * clusters_running(wh, day, gt) * wh.credits_per_hour)
+    base = _dec(hours * clusters_running(wh, day, gt) * wh.credits_per_hour)
+    if multiplier == ONE:
+        return base
+    return (base * multiplier).quantize(Decimal("0.000000001"))
 
 
 def attribution_ratio(wh: Warehouse, day: date, gt: GroundTruth) -> float:
@@ -129,9 +152,13 @@ def attribution_ratio(wh: Warehouse, day: date, gt: GroundTruth) -> float:
 
 def _daily_query_budget(config: GeneratorConfig, account: Account, wh: Warehouse) -> int:
     """Share of the daily query volume issued against this warehouse."""
-    weights = {"elt": 1.4, "bi": 2.2, "adhoc": 1.6, "training": 0.3, "zombie": 0.0}
-    total = sum(weights.get(w.workload, 1.0) for w in account.warehouses)
-    share = weights.get(wh.workload, 1.0) / total if total else 0.0
+    mix = config.workload_multipliers
+
+    def weight(workload: str) -> float:
+        return DEFAULT_WORKLOAD_WEIGHTS.get(workload, 1.0) * mix.get(workload, 1.0)
+
+    total = sum(weight(w.workload) for w in account.warehouses)
+    share = weight(wh.workload) / total if total else 0.0
     return max(int(config.daily_queries * share), 0)
 
 
@@ -174,7 +201,7 @@ class WorkloadGenerator:
             if hours <= 0:
                 continue
 
-            metered = warehouse_credits(wh, day, self.gt)
+            metered = warehouse_credits(wh, day, self.gt, self.config.compute_multiplier(day))
             attributable = metered * _dec(attribution_ratio(wh, day, self.gt), "0.0001")
             templates = _fingerprints_for(wh) or QUERY_TEMPLATES
             # Weight query cost so the planted offender dominates after its day.
@@ -312,7 +339,7 @@ class WorkloadGenerator:
             "DATABASE_NAME": "DB_PROD" if wh.workload == "elt" else "DB_ANALYTICS",
             "SCHEMA_NAME": "ELT" if wh.workload == "elt" else "MARTS",
             "QUERY_TYPE": query_type,
-            "SESSION_ID": str(abs(hash((query_id, "session"))) % 10**12),
+            "SESSION_ID": _session_id(query_id),
             "USER_NAME": user,
             "ROLE_NAME": f"ROLE_{team.removeprefix('TEAM_')}",
             "WAREHOUSE_ID": str(1000 + self.account.warehouses.index(wh)),
@@ -373,8 +400,9 @@ class WorkloadGenerator:
     # -------------------------------------------------------------- metering
     def warehouse_metering(self, day: date) -> Iterator[dict[str, Any]]:
         """Hourly WAREHOUSE_METERING_HISTORY rows for a day."""
+        multiplier = self.config.compute_multiplier(day)
         for i, wh in enumerate(self.account.warehouses):
-            total = warehouse_credits(wh, day, self.gt)
+            total = warehouse_credits(wh, day, self.gt, multiplier)
             if total <= 0:
                 continue
             hours = max(round(running_hours(wh, day, self.gt)), 1)
@@ -397,7 +425,8 @@ class WorkloadGenerator:
                 }
 
     def daily_compute_credits(self, day: date) -> Decimal:
+        multiplier = self.config.compute_multiplier(day)
         return sum(
-            (warehouse_credits(wh, day, self.gt) for wh in self.account.warehouses),
+            (warehouse_credits(wh, day, self.gt, multiplier) for wh in self.account.warehouses),
             Decimal(0),
         )

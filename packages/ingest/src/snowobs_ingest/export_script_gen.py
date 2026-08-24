@@ -12,7 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from snowobs_semantics.registry import LoadStrategy, SourceRegistry, default_registry
+from snowobs_semantics.registry import (
+    LoadStrategy,
+    SourceRegistry,
+    SourceScope,
+    default_registry,
+)
 
 STAGE = "@~/snowobs"
 
@@ -60,6 +65,27 @@ def _copy_statement(
     )
 
 
+def _scope_banner(scope: SourceScope) -> str:
+    """Header separating the per-account block from the organization block."""
+    if scope is SourceScope.ORGANIZATION:
+        return (
+            "-- ======================================================================\n"
+            "-- ORGANIZATION_USAGE — run this block ONCE, in the organization account\n"
+            "-- (or a regular account with ORGADMIN enabled). These views name every\n"
+            "-- account in the organization in their own ACCOUNT_NAME column, so they\n"
+            "-- are exported once for the whole fleet rather than once per account.\n"
+            "-- ======================================================================\n"
+        )
+    return (
+        "-- ======================================================================\n"
+        "-- ACCOUNT_USAGE — run this block in EACH account you want observed.\n"
+        "-- These views carry no account column, so keep each account's download in\n"
+        "-- its own directory and tell the platform which account it came from when\n"
+        "-- you upload it; that is what the coverage matrix reports per account.\n"
+        "-- ======================================================================\n"
+    )
+
+
 def _show_statement(source_id: str) -> str:
     # SHOW-based sources have no COPY path; the operator downloads the grid.
     return (
@@ -89,7 +115,10 @@ def generate_extract_kit(
         for source in registry
         if include_optional or source.criticality.value in {"core", "important"}
     ]
-    selected.sort(key=lambda s: (s.criticality.value, s.domain, s.id))
+    # Account-scoped views first, then the organization-scoped ones: an
+    # enterprise runs the first block once per account and the second block once,
+    # in the ORGADMIN-enabled or organization account.
+    selected.sort(key=lambda s: (s.scope.value, s.criticality.value, s.domain, s.id))
 
     extract_lines = [
         "-- Observability & FinOps Platform for Snowflake — extract script",
@@ -106,12 +135,16 @@ def generate_extract_kit(
     extract_lines.append("")
 
     manifest_files: list[dict[str, object]] = []
+    emitted_scopes: set[str] = set()
     for source in selected:
+        if source.scope.value not in emitted_scopes:
+            emitted_scopes.add(source.scope.value)
+            extract_lines.append(_scope_banner(source.scope))
         role = source.required_db_role or "(no additional grant required)"
         extract_lines.append(
             f"-- {source.id} · {source.snowflake_object}\n"
             f"-- criticality={source.criticality.value} · edition>={source.edition_min.value} "
-            f"· requires {role}"
+            f"· scope={source.scope.value} · requires {role}"
         )
         if source.snowflake_object.startswith("SHOW "):
             extract_lines.append(_show_statement(source.id))
@@ -132,6 +165,7 @@ def generate_extract_kit(
                 "snowflake_object": source.snowflake_object,
                 "expected_prefix": f"{source.id}/",
                 "criticality": source.criticality.value,
+                "scope": source.scope.value,
                 "required_db_role": source.required_db_role,
             }
         )
@@ -220,6 +254,17 @@ data outside `{STAGE}`.
    and produce `snowobs-extract.zip`.
 3. **Upload the zip** in the platform's onboarding wizard. The coverage matrix
    will show exactly what landed and what is still missing.
+
+## Organizations with more than one account
+
+The script is in two blocks. Run the **ACCOUNT_USAGE** block in *each* account
+you want observed, keeping each account's download in its own directory, and
+name the account when you upload it — those views carry no account column, so
+the platform records the provenance itself and cannot infer it. Run the
+**ORGANIZATION_USAGE** block *once*, in the organization account (or a regular
+account with ORGADMIN enabled): those views already name every account in the
+organization, and exporting them from each account would produce contradictory
+copies of the same organization-wide table.
 
 ## If stages or the CLI are blocked
 

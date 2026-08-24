@@ -53,6 +53,11 @@ def literal(value: str) -> str:
     return f"'{value}'"
 
 
+#: The ingest metadata column recording which Snowflake account a batch came
+#: from. Not part of any source's schema — ACCOUNT_USAGE has no such column.
+ACCOUNT_COLUMN = "_ACCOUNT"
+
+
 @dataclass(frozen=True)
 class SourceStats:
     """What the catalog knows about one landed source."""
@@ -62,6 +67,9 @@ class SourceStats:
     min_timestamp: str | None
     max_timestamp: str | None
     batches: int
+    #: The account the rows were tagged with, when these stats are scoped to
+    #: one; ``None`` for the whole-source figures.
+    account: str | None = None
 
     @property
     def window(self) -> tuple[date, date] | None:
@@ -111,6 +119,26 @@ class DuckDBCatalog:
     def landed_sources(self) -> list[str]:
         return [s for s in self.registry.ids() if self.parts_for(s)]
 
+    def _glob_for(self, source_id: str) -> str:
+        return literal(
+            str(tenant_root(self.storage_root, self.tenant) / source_id / "part-*.parquet")
+        )
+
+    def part_columns(self, source_id: str) -> list[str]:
+        """Columns present in a source's landed Parquet, before registration.
+
+        Read from the files rather than from the view, because the view's
+        definition depends on this answer — the dedup key includes the account
+        stamp only when the parts actually carry it.
+        """
+        if not self.parts_for(source_id):
+            return []
+        rows = self.connection.execute(
+            f"DESCRIBE SELECT * FROM read_parquet({self._glob_for(source_id)}, "  # noqa: S608
+            "union_by_name = true)"
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def dataset_version(self) -> str:
         """A fingerprint of exactly what is landed for this tenant.
 
@@ -150,12 +178,20 @@ class DuckDBCatalog:
         # Identifiers reach SQL only after ident()/literal() vetting, so the
         # interpolation below cannot carry an injection payload (R9).
         view = ident(source_id)
-        glob = literal(
-            str(tenant_root(self.storage_root, self.tenant) / source_id / "part-*.parquet")
-        )
+        glob = self._glob_for(source_id)
 
         if source.grain:
-            grain = ", ".join(ident(column.upper()) for column in source.grain)
+            grain_columns = [ident(column.upper()) for column in source.grain]
+            # An ACCOUNT_USAGE view's grain is implicitly *per account* — its
+            # rows carry no account column, so two accounts' extracts collide
+            # on QUERY_ID or (WAREHOUSE_ID, START_TIME) and last-write-wins
+            # would silently discard one account's entire history. The account
+            # the batch came from is therefore part of the dedup key. An
+            # ORGANIZATION_USAGE view already names the account in its own
+            # schema, so its declared grain is complete as it stands.
+            if not source.is_organization_scoped and self.has_account_column(source_id):
+                grain_columns.append(ident(ACCOUNT_COLUMN))
+            grain = ", ".join(grain_columns)
             # Last-write-wins on ingest time keeps overlapping uploads idempotent.
             sql = f"""
                 CREATE OR REPLACE VIEW {view} AS
@@ -173,22 +209,57 @@ class DuckDBCatalog:
             """  # noqa: S608 — as above
         self.connection.execute(sql)
 
+    # -------------------------------------------------------------- accounts
+    def has_account_column(self, source_id: str) -> bool:
+        """Whether this source's landed parts carry the ``_ACCOUNT`` stamp.
+
+        Parquet written before the column existed simply does not have it, and
+        ``union_by_name`` will not invent one, so every account-aware read
+        checks first rather than failing on a lake that predates the column.
+        """
+        return ACCOUNT_COLUMN in self.part_columns(source_id)
+
+    def accounts_for(self, source_id: str) -> list[str]:
+        """Accounts whose extracts have landed for one source."""
+        if not self.has_account_column(source_id):
+            return []
+        rows = self.connection.execute(
+            f'SELECT DISTINCT "{ACCOUNT_COLUMN}" FROM {ident(source_id)} '  # noqa: S608
+            f'WHERE "{ACCOUNT_COLUMN}" IS NOT NULL ORDER BY 1'
+        ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def accounts(self) -> list[str]:
+        """Every account present anywhere in this tenant's lake, in name order.
+
+        An enterprise lake holds several accounts' extracts side by side; this
+        is what tells the coverage page and the org roll-ups which they are.
+        """
+        found: set[str] = set()
+        for source_id in self.landed_sources():
+            found.update(self.accounts_for(source_id))
+        return sorted(found)
+
     # ----------------------------------------------------------------- stats
-    def stats(self, source_id: str) -> SourceStats | None:
+    def stats(self, source_id: str, account: str | None = None) -> SourceStats | None:
+        """Row counts and window for a source, optionally for one account."""
         if not self.parts_for(source_id):
+            return None
+        if account is not None and not self.has_account_column(source_id):
             return None
         source = self.registry.get(source_id)
         view = ident(source_id)
-        time_column = ident(source.time_column.upper()) if source.time_column else None
-        if time_column:
-            row = self.connection.execute(
-                f"SELECT COUNT(*), MIN({time_column}), MAX({time_column}), "  # noqa: S608
-                f'COUNT(DISTINCT "_BATCH_ID") FROM {view}'
-            ).fetchone()
+        time_column = ident(source.time_column.upper()) if source.time_column else "NULL"
+        clause = f' WHERE "{ACCOUNT_COLUMN}" = ?' if account is not None else ""
+        params = [account] if account is not None else []
+        if source.time_column:
+            projection = f"COUNT(*), MIN({time_column}), MAX({time_column})"
         else:
-            row = self.connection.execute(
-                f'SELECT COUNT(*), NULL, NULL, COUNT(DISTINCT "_BATCH_ID") FROM {view}'  # noqa: S608
-            ).fetchone()
+            projection = "COUNT(*), NULL, NULL"
+        row = self.connection.execute(
+            f'SELECT {projection}, COUNT(DISTINCT "_BATCH_ID") FROM {view}{clause}',  # noqa: S608
+            params,
+        ).fetchone()
         if row is None:  # pragma: no cover - an aggregate always returns a row
             raise CatalogError(f"No statistics returned for {source_id}")
         return SourceStats(
@@ -197,6 +268,7 @@ class DuckDBCatalog:
             min_timestamp=str(row[1]) if row[1] is not None else None,
             max_timestamp=str(row[2]) if row[2] is not None else None,
             batches=int(row[3]),
+            account=account,
         )
 
     def query(self, sql: str, params: list[Any] | None = None) -> list[tuple[Any, ...]]:

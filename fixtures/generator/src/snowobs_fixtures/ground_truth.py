@@ -46,6 +46,12 @@ PhenomenonKind = Literal[
     "time_travel_excess",
     "ai_spend_growth",
     "zombie_warehouse",
+    # Organization-wide phenomena (see ``organization.py``).
+    "runaway_account",
+    "stranded_commitment",
+    "cross_region_egress",
+    "account_untagged_spend",
+    "effective_rate_outlier",
 ]
 
 
@@ -86,6 +92,21 @@ def build_ground_truth(config: GeneratorConfig) -> GroundTruth:
     ai_start = start + timedelta(days=min(70, config.days - 10))
     drift_day = start + timedelta(days=min(100, config.days - 4))
     failure_day = start + timedelta(days=min(75, config.days - 6))
+
+    # A profile that deliberately degrades tagging discipline moves the untagged
+    # share well outside the base profile's calibrated band, so the expectation
+    # follows the profile rather than pretending the band still applies.
+    untagged_subjects = [WH_UNTAGGED_1, WH_UNTAGGED_2, *config.untagged_warehouses]
+    untagged_expectations: dict[str, float | int | str] = (
+        {"min_untagged_pct": 25.0, "max_untagged_pct": 95.0}
+        if config.untagged_warehouses
+        else {"min_untagged_pct": 12.0, "max_untagged_pct": 25.0}
+    )
+    untagged_description = (
+        f"Degraded tagging discipline: {len(untagged_subjects)} warehouses carry no owner team."
+        if config.untagged_warehouses
+        else "~18% of spend is untagged, concentrated in two warehouses."
+    )
 
     return GroundTruth(
         seed=config.seed,
@@ -174,11 +195,11 @@ def build_ground_truth(config: GeneratorConfig) -> GroundTruth:
             Phenomenon(
                 id="ph-untagged-spend",
                 kind="untagged_spend",
-                description="~18% of spend is untagged, concentrated in two warehouses.",
-                subjects=[WH_UNTAGGED_1, WH_UNTAGGED_2],
+                description=untagged_description,
+                subjects=untagged_subjects,
                 window_start=start,
                 window_end=end,
-                expectations={"min_untagged_pct": 12.0, "max_untagged_pct": 25.0},
+                expectations=untagged_expectations,
             ),
             Phenomenon(
                 id="ph-dormant-users",

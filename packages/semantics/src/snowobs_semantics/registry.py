@@ -49,6 +49,20 @@ class LoadStrategy(StrEnum):
     FULL_SNAPSHOT = "full_snapshot"
 
 
+class SourceScope(StrEnum):
+    """Whether a view describes one account or the whole organization.
+
+    ACCOUNT_USAGE views are per-account and carry no account column at all, so
+    which account an extract came from is knowledge the *platform* has to
+    record. ORGANIZATION_USAGE views span the fleet and name the account in
+    their own schema. The distinction drives ingest tagging, the coverage
+    matrix, and which Snowflake role the extract needs.
+    """
+
+    ACCOUNT = "account"
+    ORGANIZATION = "organization"
+
+
 class SourceColumn(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -81,6 +95,9 @@ class SourceDefinition(BaseModel):
     snowflake_object: str
     domain: str
     criticality: Criticality
+    #: Account-scoped by default: the great majority of registered views are
+    #: ACCOUNT_USAGE, and defaulting keeps every existing YAML valid.
+    scope: SourceScope = SourceScope.ACCOUNT
     edition_min: Edition = Edition.STANDARD
     required_db_role: str | None = None
     documented_latency_minutes: int
@@ -115,6 +132,10 @@ class SourceDefinition(BaseModel):
     def required_columns(self) -> list[SourceColumn]:
         return [c for c in self.columns if c.required]
 
+    @property
+    def is_organization_scoped(self) -> bool:
+        return self.scope is SourceScope.ORGANIZATION
+
 
 def _jaccard(a: set[str], b: set[str]) -> float:
     if not a and not b:
@@ -147,6 +168,14 @@ class SourceRegistry(BaseModel):
 
     def ids(self) -> list[str]:
         return sorted(self.sources)
+
+    def scoped(self, scope: SourceScope) -> list[SourceDefinition]:
+        """Every source at one scope, in id order."""
+        return [
+            self.sources[source_id]
+            for source_id in self.ids()
+            if self.sources[source_id].scope is scope
+        ]
 
     def match_filename(self, filename: str) -> SourceMatch | None:
         """Match an uploaded file to a source by its filename aliases."""

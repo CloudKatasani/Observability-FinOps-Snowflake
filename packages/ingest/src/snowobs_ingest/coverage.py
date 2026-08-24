@@ -3,6 +3,14 @@
 For every registered source: is it present, how many rows, what window, how
 fresh against its documented latency, and how many KPIs it enables. For every
 KPI: enabled, degraded, or unavailable — and which missing source blocks it.
+
+An enterprise runs many accounts under one organization, and "the source is
+present" is not a useful answer when account A has query history landed and
+account B has only billing. Every source therefore also reports its status
+**per account** (``SourceCoverage.accounts``), derived from the ``_ACCOUNT``
+stamp ingest records. The top-level figures keep their original meaning — the
+whole tenant, every account together — so a single-account deployment sees
+exactly what it saw before, with an empty per-account list.
 """
 
 from __future__ import annotations
@@ -12,8 +20,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from snowobs_ingest.catalog import DuckDBCatalog, freshness_minutes
-from snowobs_semantics.registry import SourceDefinition, SourceRegistry
+from snowobs_ingest.catalog import DuckDBCatalog, SourceStats, freshness_minutes
+from snowobs_semantics.registry import SourceDefinition, SourceRegistry, SourceScope
 
 
 class SourceStatus(StrEnum):
@@ -29,11 +37,35 @@ class MetricAvailability(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class AccountCoverage(BaseModel):
+    """One account's slice of one source.
+
+    Present only when ingest recorded which account a batch came from; the
+    account is never inferred from the rows, because ACCOUNT_USAGE extracts
+    carry no account column to infer it from.
+    """
+
+    account: str
+    status: SourceStatus
+    rows: int = 0
+    batches: int = 0
+    window_start: date | None = None
+    window_end: date | None = None
+    freshness_minutes: float | None = None
+
+    @property
+    def blocking(self) -> bool:
+        return self.status in (SourceStatus.MISSING, SourceStatus.EMPTY)
+
+
 class SourceCoverage(BaseModel):
     source_id: str
     snowflake_object: str
     domain: str
     criticality: str
+    #: "account" or "organization" — an organization-scoped view is exported
+    #: once for the whole fleet, not once per account.
+    scope: str = SourceScope.ACCOUNT.value
     status: SourceStatus
     rows: int = 0
     batches: int = 0
@@ -45,10 +77,15 @@ class SourceCoverage(BaseModel):
     #: How to fix it — copy-pastable remediation, never a bare "no data".
     remediation: str | None = None
     enables_metric_count: int = 0
+    #: Per-account status, empty when the lake records no account stamps.
+    accounts: list[AccountCoverage] = Field(default_factory=list)
 
     @property
     def blocking(self) -> bool:
         return self.status in (SourceStatus.MISSING, SourceStatus.EMPTY)
+
+    def for_account(self, account: str) -> AccountCoverage | None:
+        return next((a for a in self.accounts if a.account == account), None)
 
 
 class MetricCoverage(BaseModel):
@@ -65,6 +102,9 @@ class CoverageMatrix(BaseModel):
     mode: str
     sources: list[SourceCoverage]
     metrics: list[MetricCoverage] = Field(default_factory=list)
+    #: Accounts whose extracts are present in this tenant's lake. Empty for a
+    #: deployment that never told ingest which account it was uploading.
+    accounts: list[str] = Field(default_factory=list)
 
     @property
     def available_sources(self) -> list[SourceCoverage]:
@@ -76,6 +116,24 @@ class CoverageMatrix(BaseModel):
 
     def source(self, source_id: str) -> SourceCoverage:
         return next(s for s in self.sources if s.source_id == source_id)
+
+    def account_matrix(self, account: str) -> list[AccountCoverage]:
+        """Every source's status for one account, in the matrix's source order.
+
+        A source the account has landed nothing for reports MISSING for that
+        account even when a sibling account has it — which is the whole point:
+        "account X has query history, account Y only has billing" is a coverage
+        answer, not a silence.
+        """
+        rows: list[AccountCoverage] = []
+        for source in self.sources:
+            existing = source.for_account(account)
+            rows.append(
+                existing
+                if existing is not None
+                else AccountCoverage(account=account, status=SourceStatus.MISSING)
+            )
+        return rows
 
     def data_window(self) -> tuple[date, date] | None:
         starts = [s.window_start for s in self.sources if s.window_start]
@@ -117,38 +175,66 @@ def _remediation_for(source: SourceDefinition, status: SourceStatus, mode: str) 
     )
 
 
+def _assess(
+    source: SourceDefinition, stats: SourceStats | None, reference: datetime
+) -> tuple[SourceStatus, int, int, tuple[date, date] | None, float | None]:
+    """Status, rows, batches, window, freshness for one set of statistics."""
+    if stats is None:
+        return SourceStatus.MISSING, 0, 0, None, None
+    if stats.rows == 0:
+        return SourceStatus.EMPTY, 0, stats.batches, None, None
+    freshness = freshness_minutes(stats, as_of=reference)
+    # A snapshot source has no time column; it cannot be judged stale.
+    if freshness is None or source.time_column is None:
+        status = SourceStatus.AVAILABLE
+    else:
+        # Allow the documented latency plus a day of extract age before
+        # calling a source stale — R7 honesty, not alarmism.
+        budget = source.documented_latency_minutes + 24 * 60
+        status = SourceStatus.AVAILABLE if freshness <= budget else SourceStatus.STALE
+    return status, stats.rows, stats.batches, stats.window, freshness
+
+
 def build_source_coverage(
     catalog: DuckDBCatalog,
     *,
     mode: str = "offline",
     as_of: datetime | None = None,
+    accounts: list[str] | None = None,
 ) -> list[SourceCoverage]:
-    """Assess every registered source against what actually landed."""
+    """Assess every registered source against what actually landed.
+
+    ``accounts`` restricts the per-account breakdown; by default every account
+    the lake knows about is reported for every source it landed.
+    """
     reference = as_of or datetime.now()  # noqa: DTZ005 — naive, matches source stamps
     registry = catalog.registry
+    known_accounts = catalog.accounts() if accounts is None else accounts
     coverage: list[SourceCoverage] = []
 
     for source in registry:
         stats = catalog.stats(source.id)
-        if stats is None:
-            status = SourceStatus.MISSING
-            rows = batches = 0
-            window: tuple[date, date] | None = None
-            freshness: float | None = None
-        elif stats.rows == 0:
-            status = SourceStatus.EMPTY
-            rows, batches, window, freshness = 0, stats.batches, None, None
-        else:
-            rows, batches, window = stats.rows, stats.batches, stats.window
-            freshness = freshness_minutes(stats, as_of=reference)
-            # A snapshot source has no time column; it cannot be judged stale.
-            if freshness is None or source.time_column is None:
-                status = SourceStatus.AVAILABLE
-            else:
-                # Allow the documented latency plus a day of extract age before
-                # calling a source stale — R7 honesty, not alarmism.
-                budget = source.documented_latency_minutes + 24 * 60
-                status = SourceStatus.AVAILABLE if freshness <= budget else SourceStatus.STALE
+        status, rows, batches, window, freshness = _assess(source, stats, reference)
+
+        per_account: list[AccountCoverage] = []
+        if known_accounts and stats is not None and catalog.has_account_column(source.id):
+            landed_for = set(catalog.accounts_for(source.id))
+            for account in known_accounts:
+                account_stats = catalog.stats(source.id, account) if account in landed_for else None
+                a_status, a_rows, a_batches, a_window, a_fresh = _assess(
+                    source, account_stats, reference
+                )
+                per_account.append(
+                    AccountCoverage(
+                        account=account,
+                        status=a_status,
+                        rows=a_rows,
+                        batches=a_batches,
+                        window_start=a_window[0] if a_window else None,
+                        window_end=a_window[1] if a_window else None,
+                        freshness_minutes=round(a_fresh, 1) if a_fresh is not None else None,
+                    )
+                )
 
         coverage.append(
             SourceCoverage(
@@ -156,6 +242,7 @@ def build_source_coverage(
                 snowflake_object=source.snowflake_object,
                 domain=source.domain,
                 criticality=source.criticality.value,
+                scope=source.scope.value,
                 status=status,
                 rows=rows,
                 batches=batches,
@@ -166,6 +253,7 @@ def build_source_coverage(
                 latency_verified=source.latency_verified,
                 remediation=_remediation_for(source, status, mode),
                 enables_metric_count=len(source.enables_metrics),
+                accounts=per_account,
             )
         )
     return sorted(coverage, key=lambda c: (c.domain, c.source_id))
@@ -231,7 +319,8 @@ def build_coverage_matrix(
     optional_requirements: dict[str, list[str]] | None = None,
 ) -> CoverageMatrix:
     reference = as_of or datetime.now()  # noqa: DTZ005
-    sources = build_source_coverage(catalog, mode=mode, as_of=reference)
+    accounts = catalog.accounts()
+    sources = build_source_coverage(catalog, mode=mode, as_of=reference, accounts=accounts)
     metrics = (
         assess_metrics(sources, metric_requirements, optional_requirements)
         if metric_requirements
@@ -241,7 +330,13 @@ def build_coverage_matrix(
     # land that way, but the reported `as_of` is labelled UTC — which is what
     # those stamps are — so every timestamp this API returns carries an offset
     # and a client never has to guess which zone a bare one is in.
-    return CoverageMatrix(as_of=as_utc(reference), mode=mode, sources=sources, metrics=metrics)
+    return CoverageMatrix(
+        as_of=as_utc(reference),
+        mode=mode,
+        sources=sources,
+        metrics=metrics,
+        accounts=accounts,
+    )
 
 
 def as_utc(value: datetime) -> datetime:

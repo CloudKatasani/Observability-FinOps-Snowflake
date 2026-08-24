@@ -1,6 +1,7 @@
 id: storage_daily_history
 snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.STORAGE_DAILY_HISTORY
 domain: storage
+scope: organization
 criticality: important
 edition_min: standard
 required_db_role: SNOWFLAKE.ORGANIZATION_USAGE_VIEWER

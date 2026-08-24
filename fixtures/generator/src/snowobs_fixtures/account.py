@@ -8,7 +8,7 @@ runs for a given config so ground-truth assertions can reference them directly.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from snowobs_fixtures.config import GeneratorConfig
@@ -161,7 +161,7 @@ def build_account(config: GeneratorConfig) -> Account:
         ),
         Warehouse(WH_UNTAGGED_2, "Large", None, 3600, busy_hours=4, workload="zombie"),
     ]
-    warehouses = base_warehouses[: max(config.warehouses, 12)]
+    warehouses = _apply_profile(base_warehouses[: max(config.warehouses, 12)], config)
 
     users: list[User] = []
     for team in teams:
@@ -207,6 +207,34 @@ def build_account(config: GeneratorConfig) -> Account:
         databases=databases,
         task_graphs=task_graphs,
     )
+
+
+def _apply_profile(warehouses: list[Warehouse], config: GeneratorConfig) -> list[Warehouse]:
+    """Bend the base topology to an account profile.
+
+    Two knobs, both no-ops for the default configuration. The workload mix
+    scales a class of warehouses' busy hours (an analytics account really does
+    run its BI warehouses longer and its ELT ones less), and the forced-untagged
+    list strips the owner team from named warehouses so that an account can have
+    materially worse tagging discipline than its siblings. Neither changes any
+    warehouse's size or cluster policy, so the planted per-warehouse phenomena
+    stay anchored to the same objects.
+    """
+    multipliers = config.workload_multipliers
+    forced_untagged = set(config.untagged_warehouses)
+    if not multipliers and not forced_untagged:
+        return warehouses
+
+    shaped: list[Warehouse] = []
+    for wh in warehouses:
+        factor = multipliers.get(wh.workload, 1.0)
+        changes: dict[str, object] = {}
+        if factor != 1.0:
+            changes["busy_hours"] = round(wh.busy_hours * factor, 4)
+        if wh.name in forced_untagged:
+            changes["owner_team"] = None
+        shaped.append(replace(wh, **changes) if changes else wh)  # type: ignore[arg-type]
+    return shaped
 
 
 def business_factor(day: date) -> float:

@@ -1,6 +1,7 @@
 id: org_warehouse_metering_history
 snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.WAREHOUSE_METERING_HISTORY
 domain: cost
+scope: organization
 criticality: optional
 edition_min: standard
 required_db_role: SNOWFLAKE.ORGANIZATION_USAGE_VIEWER

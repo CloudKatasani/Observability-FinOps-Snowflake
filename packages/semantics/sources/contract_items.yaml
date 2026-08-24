@@ -1,6 +1,7 @@
 id: contract_items
 snowflake_object: SNOWFLAKE.ORGANIZATION_USAGE.CONTRACT_ITEMS
 domain: cost
+scope: organization
 criticality: important
 edition_min: standard
 required_db_role: SNOWFLAKE.ORGANIZATION_BILLING_VIEWER

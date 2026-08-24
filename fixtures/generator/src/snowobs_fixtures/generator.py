@@ -176,14 +176,20 @@ def generate(config: GeneratorConfig | None = None) -> GeneratedAccount:
     return result
 
 
-def write_csv(
-    generated: GeneratedAccount, output_dir: Path, *, compress: bool = False
+def write_tables_csv(
+    tables: dict[str, list[dict[str, Any]]], output_dir: Path, *, compress: bool = False
 ) -> dict[str, Path]:
-    """Write one CSV per source, named so the ingestion pipeline can identify it."""
+    """Write one CSV per non-empty source, named for the ingestion pipeline.
+
+    Shared by the single-account writer and the organization writer so that an
+    account extract and an organization extract are produced by exactly the
+    same code — a difference between the two would be a difference the upload
+    path could see.
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
-    for source_id in generated.source_ids:
-        rows = generated.tables[source_id]
+    for source_id in sorted(tables):
+        rows = tables[source_id]
         if not rows:
             continue
         suffix = ".csv.gz" if compress else ".csv"
@@ -199,25 +205,46 @@ def write_csv(
             writer.writeheader()
             writer.writerows(rows)
         written[source_id] = path
+    return written
 
-    manifest = {
+
+def write_manifest(
+    output_dir: Path,
+    written: dict[str, Path],
+    tables: dict[str, list[dict[str, Any]]],
+    ground_truth: GroundTruth,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> Path:
+    """Write the extract manifest and the ground-truth file beside the data."""
+    manifest: dict[str, Any] = {
         "generated_by": "snowobs-fixtures",
-        "seed": generated.ground_truth.seed,
+        "seed": ground_truth.seed,
         "window": {
-            "start": generated.ground_truth.start_date.isoformat(),
-            "end": generated.ground_truth.end_date.isoformat(),
+            "start": ground_truth.start_date.isoformat(),
+            "end": ground_truth.end_date.isoformat(),
         },
         "files": {
-            source_id: {"path": path.name, "rows": generated.row_count(source_id)}
+            source_id: {"path": path.name, "rows": len(tables.get(source_id, []))}
             for source_id, path in written.items()
         },
     }
-    (output_dir / "03_manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
+    if extra:
+        manifest.update(extra)
+    manifest_path = output_dir / "03_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (output_dir / "ground_truth.json").write_text(
-        generated.ground_truth.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        ground_truth.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
+    return manifest_path
+
+
+def write_csv(
+    generated: GeneratedAccount, output_dir: Path, *, compress: bool = False
+) -> dict[str, Path]:
+    """Write one CSV per source, named so the ingestion pipeline can identify it."""
+    written = write_tables_csv(generated.tables, output_dir, compress=compress)
+    write_manifest(output_dir, written, generated.tables, generated.ground_truth)
     return written
 
 
@@ -248,5 +275,7 @@ __all__ = [
     "generate",
     "summarise",
     "write_csv",
+    "write_manifest",
     "write_parquet",
+    "write_tables_csv",
 ]

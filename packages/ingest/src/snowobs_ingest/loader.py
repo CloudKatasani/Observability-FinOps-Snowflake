@@ -5,6 +5,17 @@ root and are registered as DuckDB views. A second upload for a later window
 merges rather than replaces: dataset versions are tracked with their window
 bounds, and duplicates on the declared grain resolve last-write-wins on ingest
 timestamp.
+
+**Which account an extract came from is platform knowledge, not source data.**
+Real ``ACCOUNT_USAGE`` views carry no account column — an extract from one
+account is indistinguishable from another's once it is a file on disk — so the
+account is recorded the same way the load timestamp and batch id are: as an
+ingest metadata column, ``_ACCOUNT``, stamped on every row of the batch. It
+records *the Snowflake account the batch was extracted from*. For an
+organization-scoped view (``ORGANIZATION_USAGE``) that is the ORGADMIN-enabled
+or organization account the export ran in — usually named for the organization
+— and the per-account attribution for those rows lives in the view's own
+``ACCOUNT_NAME`` column, which ingest never overwrites.
 """
 
 from __future__ import annotations
@@ -30,7 +41,7 @@ from snowobs_semantics.registry import ColumnType, SourceRegistry, default_regis
 logger = get_logger(__name__)
 
 BATCH_ROWS = 50_000
-INGEST_COLUMNS = ("_LOADED_AT", "_SOURCE_VIEW", "_BATCH_ID")
+INGEST_COLUMNS = ("_LOADED_AT", "_SOURCE_VIEW", "_BATCH_ID", "_ACCOUNT")
 
 
 @dataclass
@@ -45,6 +56,9 @@ class DatasetVersion:
     window_start: date | None
     window_end: date | None
     parquet_path: str
+    #: The Snowflake account this batch was extracted from, if the uploader
+    #: said. ``None`` means "not recorded" — never a guess.
+    account: str | None = None
 
 
 @dataclass
@@ -89,6 +103,10 @@ class IngestSummary:
 
     def source_ids(self) -> set[str]:
         return {r.version.source_id for r in self.landed if r.version}
+
+    def accounts(self) -> set[str]:
+        """Accounts this upload was tagged with (empty when none was given)."""
+        return {r.version.account for r in self.landed if r.version and r.version.account}
 
 
 def _rows_from_profile(profile: FileProfile) -> Iterator[dict[str, Any]]:
@@ -141,9 +159,7 @@ def _arrow_schema(source_id: str, registry: SourceRegistry, extra: list[str]) ->
     source = registry.get(source_id)
     fields = [pa.field(column.name.upper(), type_map[column.type]) for column in source.columns]
     fields.extend(pa.field(name.upper(), pa.string()) for name in extra)
-    fields.append(pa.field("_LOADED_AT", pa.string()))
-    fields.append(pa.field("_SOURCE_VIEW", pa.string()))
-    fields.append(pa.field("_BATCH_ID", pa.string()))
+    fields.extend(pa.field(name, pa.string()) for name in INGEST_COLUMNS)
     return pa.schema(fields)
 
 
@@ -167,11 +183,16 @@ def _quantise_decimals(rows: list[dict[str, Any]], schema: Any) -> None:
 class LakeWriter:
     """Writes validated rows to Parquet under the storage root."""
 
-    def __init__(self, storage_root: Path, tenant: str = "default") -> None:
+    def __init__(
+        self, storage_root: Path, tenant: str = "default", account: str | None = None
+    ) -> None:
         self.storage_root = storage_root
         # The write side needs the same guard as the read side: a traversal
         # here would land one customer's extract inside another's prefix.
         self.tenant = validate_tenant(tenant)
+        #: Default account stamped on batches this writer lands. Unlike the
+        #: tenant it is not a path segment, so it is recorded verbatim.
+        self.account = account
 
     def path_for(self, source_id: str, batch_id: str) -> Path:
         return tenant_root(self.storage_root, self.tenant) / source_id / f"part-{batch_id}.parquet"
@@ -183,16 +204,21 @@ class LakeWriter:
         batch_id: str,
         registry: SourceRegistry,
         extra_columns: list[str],
+        account: str | None = None,
     ) -> Path:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
         schema = _arrow_schema(source_id, registry, extra_columns)
         loaded_at = datetime.now(tz=UTC).isoformat()
+        stamped_account = account if account is not None else self.account
         for row in rows:
             row["_LOADED_AT"] = loaded_at
             row["_SOURCE_VIEW"] = registry.get(source_id).snowflake_object
             row["_BATCH_ID"] = batch_id
+            # Never derived from the rows: an ACCOUNT_USAGE extract carries no
+            # account column, and guessing one would be a fabricated figure.
+            row["_ACCOUNT"] = stamped_account
         _quantise_decimals(rows, schema)
 
         normalised = [{field.name: row.get(field.name) for field in schema} for row in rows]
@@ -211,14 +237,27 @@ class IngestPipeline:
         storage_root: Path,
         registry: SourceRegistry | None = None,
         tenant: str = "default",
+        account: str | None = None,
     ) -> None:
         self.registry = registry or default_registry()
-        self.writer = LakeWriter(storage_root, tenant)
+        self.writer = LakeWriter(storage_root, tenant, account)
         self.tenant = tenant
+        self.account = account
         self.versions: list[DatasetVersion] = []
 
-    def ingest_file(self, path: Path, *, confirmed_source_id: str | None = None) -> IngestResult:
-        """Ingest one file. ``confirmed_source_id`` applies a human decision."""
+    def ingest_file(
+        self,
+        path: Path,
+        *,
+        confirmed_source_id: str | None = None,
+        account: str | None = None,
+    ) -> IngestResult:
+        """Ingest one file. ``confirmed_source_id`` applies a human decision.
+
+        ``account`` names the Snowflake account this file was extracted from and
+        is stamped on every landed row as ``_ACCOUNT``; it overrides the
+        pipeline's own default for this file only.
+        """
         profile = profile_file(path)
         mapping = identify(profile, self.registry)
 
@@ -263,8 +302,14 @@ class IngestPipeline:
             return IngestResult(file_name=path.name, mapping=mapping, report=report)
 
         batch_id = f"{datetime.now(tz=UTC).strftime('%Y%m%dT%H%M%S%f')}-{source.id}"
+        stamped_account = account if account is not None else self.account
         parquet_path = self.writer.write(
-            source.id, accepted, batch_id, self.registry, mapping.extra_columns
+            source.id,
+            accepted,
+            batch_id,
+            self.registry,
+            mapping.extra_columns,
+            account=stamped_account,
         )
         window = report.window()
         version = DatasetVersion(
@@ -276,6 +321,7 @@ class IngestPipeline:
             window_start=window[0] if window else None,
             window_end=window[1] if window else None,
             parquet_path=str(parquet_path),
+            account=stamped_account,
         )
         self.versions.append(version)
         logger.info(
@@ -285,11 +331,17 @@ class IngestPipeline:
             rows=len(accepted),
             rejected=report.rows_rejected,
             drift_columns=report.drift_new_columns,
+            account=stamped_account,
         )
         return IngestResult(file_name=path.name, mapping=mapping, report=report, version=version)
 
-    def ingest_directory(self, directory: Path) -> IngestSummary:
-        """Ingest every data file in a directory (the upload path)."""
+    def ingest_directory(self, directory: Path, *, account: str | None = None) -> IngestSummary:
+        """Ingest every data file in a directory (the upload path).
+
+        ``account`` tags every row landed from this directory with the account
+        it was extracted from — one directory per account is how an enterprise
+        exports, so it is also how the platform records provenance.
+        """
         summary = IngestSummary()
         for path in sorted(directory.iterdir()):
             if not path.is_file():
@@ -305,5 +357,5 @@ class IngestPipeline:
                 ".ndjson",
             }:
                 continue
-            summary.results.append(self.ingest_file(path))
+            summary.results.append(self.ingest_file(path, account=account))
         return summary
